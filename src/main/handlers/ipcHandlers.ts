@@ -6,6 +6,7 @@ import {
   AppStatus,
   AudioSource,
   Language,
+  TranslationMode,
   IPC_CHANNELS,
 } from '../../shared/types'
 import type { AppState, DeviceAvailability } from '../../shared/types'
@@ -20,6 +21,7 @@ let appState: AppState = {
   audioSources: [AudioSource.MICROPHONE],
   sourceLanguage: Language.CHINESE,
   targetLanguage: Language.ENGLISH,
+  translationMode: TranslationMode.ACCURATE,
 }
 
 let speechService: GoogleSpeechService | null = null
@@ -97,6 +99,17 @@ export function registerIpcHandlers(wm: WindowManager): void {
     broadcastState()
     return true
   })
+
+  ipcMain.handle(IPC_CHANNELS.TRANSLATION_SET_MODE, (_event, mode: TranslationMode) => {
+    appState.translationMode = mode
+
+    if (speechService) {
+      speechService.setMode(mode)
+    }
+
+    broadcastState()
+    return true
+  })
 }
 
 /** 注册 display media handler 以支持系统音频捕获 */
@@ -153,6 +166,7 @@ async function startTranslation(): Promise<boolean> {
       projectId: credentials.projectId!,
       sourceLanguage: appState.sourceLanguage,
       targetLanguage: appState.targetLanguage,
+      translationMode: appState.translationMode,
       location: 'us-central1',
     })
 

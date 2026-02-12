@@ -1,11 +1,12 @@
 // Google Cloud Speech-to-Text V2 流式识别服务
-// 使用 chirp_2 模型实现实时语音转写
-// 翻译使用 Google Cloud Translation API 对最终结果进行翻译
+// 支持两种翻译模式：
+// - 流式模式：使用 chirp_2 translationConfig 直接返回翻译（低延迟）
+// - 精确模式：先转写再调用 Translate API 翻译（高准确度）
 
 import * as speech from '@google-cloud/speech'
 import { EventEmitter } from 'events'
 import * as https from 'https'
-import { Language } from '../../shared/types'
+import { Language, TranslationMode } from '../../shared/types'
 import { AppError, ErrorCode } from '../utils/errors'
 
 const LANGUAGE_MAP: Record<Language, string> = {
@@ -27,6 +28,7 @@ export interface SpeechServiceConfig {
   projectId: string
   sourceLanguage: Language
   targetLanguage: Language
+  translationMode: TranslationMode
   location?: string
 }
 
@@ -39,15 +41,33 @@ export interface SpeechResult {
   confidence?: number
 }
 
+type GrpcStream = ReturnType<InstanceType<typeof speech.v2.SpeechClient>['_streamingRecognize']>
+
 export class GoogleSpeechService extends EventEmitter {
   private client: InstanceType<typeof speech.v2.SpeechClient>
   private config: SpeechServiceConfig
-  private recognizeStream: ReturnType<InstanceType<typeof speech.v2.SpeechClient>['_streamingRecognize']> | null = null
+
+  // 转写流（始终运行）
+  private transcribeStream: GrpcStream | null = null
+  // 翻译流（仅流式模式下运行）
+  private translateStream: GrpcStream | null = null
+
   private isStreaming = false
   private streamStartTime = 0
   private restartTimer: NodeJS.Timeout | null = null
   private retryCount = 0
   private pendingAudioChunks: Buffer[] = []
+
+  // 流式模式下的结果同步缓冲
+  private latestTranscript = ''
+  private latestTranslation = ''
+  private latestIsFinal = false
+  private latestConfidence: number | undefined = undefined
+  private flushTimer: NodeJS.Timeout | null = null
+  private transcriptVersion = 0
+  private translationVersion = 0
+
+  // 精确模式下的翻译缓存
   private cachedAuthClient: { getAccessToken: () => Promise<{ token?: string | null }> } | null = null
   private cachedAccessToken: string | null = null
   private tokenExpiry = 0
@@ -65,57 +85,68 @@ export class GoogleSpeechService extends EventEmitter {
   setLanguages(source: Language, target: Language): void {
     const wasStreaming = this.isStreaming
     if (wasStreaming) this.stopStreaming()
-
     this.config.sourceLanguage = source
     this.config.targetLanguage = target
+    if (wasStreaming) this.startStreaming()
+  }
 
+  setMode(mode: TranslationMode): void {
+    const wasStreaming = this.isStreaming
+    if (wasStreaming) this.stopStreaming()
+    this.config.translationMode = mode
     if (wasStreaming) this.startStreaming()
   }
 
   startStreaming(): void {
     if (this.isStreaming) return
     this.retryCount = 0
-    this.createStream()
+    this.createStreams()
   }
 
   stopStreaming(): void {
     this.isStreaming = false
     this.clearRestartTimer()
-    this.destroyStream()
+    this.clearFlushTimer()
+    this.destroyStreams()
     this.pendingAudioChunks = []
+    this.latestTranscript = ''
+    this.latestTranslation = ''
   }
 
   writeAudio(audioData: Buffer): void {
     if (!this.isStreaming) return
 
-    if (this.recognizeStream) {
+    // 写入转写流
+    this.writeToStream(this.transcribeStream, audioData)
+
+    // 流式模式下同时写入翻译流
+    if (this.config.translationMode === TranslationMode.STREAMING && this.translateStream) {
+      this.writeToStream(this.translateStream, audioData)
+    }
+  }
+
+  private writeToStream(stream: GrpcStream | null, audioData: Buffer): void {
+    if (stream) {
       try {
-        this.recognizeStream.write({ audio: audioData })
+        stream.write({ audio: audioData })
       } catch {
-        this.pendingAudioChunks.push(audioData)
-        if (this.pendingAudioChunks.length > 100) {
-          this.pendingAudioChunks = this.pendingAudioChunks.slice(-50)
-        }
-      }
-    } else {
-      this.pendingAudioChunks.push(audioData)
-      if (this.pendingAudioChunks.length > 100) {
-        this.pendingAudioChunks = this.pendingAudioChunks.slice(-50)
+        // 忽略写入失败
       }
     }
   }
 
-  private createStream(): void {
-    this.destroyStream()
+  private createStreams(): void {
+    this.destroyStreams()
 
     const location = this.config.location || 'us-central1'
     const sourceLanguage = LANGUAGE_MAP[this.config.sourceLanguage]
+    const recognizerPath = `projects/${this.config.projectId}/locations/${location}/recognizers/_`
 
     try {
-      this.recognizeStream = this.client._streamingRecognize()
-
-      const configRequest = {
-        recognizer: `projects/${this.config.projectId}/locations/${location}/recognizers/_`,
+      // 创建转写流（无翻译，获取原始语言文本）
+      this.transcribeStream = this.client._streamingRecognize()
+      this.transcribeStream.write({
+        recognizer: recognizerPath,
         streamingConfig: {
           config: {
             explicitDecodingConfig: {
@@ -126,25 +157,51 @@ export class GoogleSpeechService extends EventEmitter {
             languageCodes: [sourceLanguage],
             model: 'chirp_2',
           },
-          streamingFeatures: {
-            interimResults: true,
-          },
+          streamingFeatures: { interimResults: true },
         },
-      }
-
-      this.recognizeStream.write(configRequest)
-
-      this.recognizeStream.on('data', (response: Record<string, unknown>) => {
-        this.handleResponse(response)
       })
 
-      this.recognizeStream.on('error', (err: Error) => {
-        this.handleStreamError(err)
+      this.transcribeStream.on('data', (response: Record<string, unknown>) => {
+        this.handleTranscribeResponse(response)
       })
-
-      this.recognizeStream.on('end', () => {
+      this.transcribeStream.on('error', (err: Error) => this.handleStreamError(err))
+      this.transcribeStream.on('end', () => {
         if (this.isStreaming) this.scheduleRestart()
       })
+
+      // 流式模式：额外创建翻译流
+      if (this.config.translationMode === TranslationMode.STREAMING) {
+        const targetLanguage = LANGUAGE_MAP[this.config.targetLanguage]
+        this.translateStream = this.client._streamingRecognize()
+        this.translateStream.write({
+          recognizer: recognizerPath,
+          streamingConfig: {
+            config: {
+              explicitDecodingConfig: {
+                encoding: 'LINEAR16',
+                sampleRateHertz: 16000,
+                audioChannelCount: 1,
+              },
+              languageCodes: [sourceLanguage],
+              model: 'chirp_2',
+              translationConfig: {
+                targetLanguage: targetLanguage,
+              },
+            },
+            streamingFeatures: { interimResults: true },
+          },
+        })
+
+        this.translateStream.on('data', (response: Record<string, unknown>) => {
+          this.handleTranslateResponse(response)
+        })
+        this.translateStream.on('error', () => {
+          // 翻译流错误不影响主转写流
+        })
+        this.translateStream.on('end', () => {
+          // 翻译流结束时不需要重启，跟随转写流
+        })
+      }
 
       this.isStreaming = true
       this.streamStartTime = Date.now()
@@ -158,7 +215,8 @@ export class GoogleSpeechService extends EventEmitter {
     }
   }
 
-  private handleResponse(response: Record<string, unknown>): void {
+  /** 处理转写流的响应 */
+  private handleTranscribeResponse(response: Record<string, unknown>): void {
     const results = response.results as Array<Record<string, unknown>> | undefined
     if (!results || results.length === 0) return
 
@@ -166,52 +224,131 @@ export class GoogleSpeechService extends EventEmitter {
       const alternatives = result.alternatives as Array<Record<string, unknown>> | undefined
       if (!alternatives || alternatives.length === 0) continue
 
-      const alternative = alternatives[0]
+      const transcript = (alternatives[0].transcript as string) || ''
+      if (!transcript.trim()) continue
+
       const isFinal = result.isFinal === true
-      const original = (alternative.transcript as string) || ''
-      if (!original.trim()) continue
+      const confidence = (alternatives[0].confidence as number) ?? undefined
 
-      const confidence = (alternative.confidence as number) ?? undefined
-
-      if (isFinal) {
-        this.translateAndEmit(original, confidence)
+      if (this.config.translationMode === TranslationMode.STREAMING) {
+        // 流式模式：更新转写缓冲，触发同步发送
+        this.latestTranscript = transcript
+        this.latestIsFinal = isFinal
+        this.latestConfidence = confidence
+        this.transcriptVersion++
+        this.tryFlushStreaming()
       } else {
-        const speechResult: SpeechResult = {
-          original,
-          translated: '',
-          sourceLanguage: this.config.sourceLanguage,
-          targetLanguage: this.config.targetLanguage,
-          isFinal: false,
-          confidence,
+        // 精确模式
+        if (isFinal) {
+          this.translateAndEmit(transcript, confidence)
+        } else {
+          this.emit('interim', {
+            original: transcript,
+            translated: '',
+            sourceLanguage: this.config.sourceLanguage,
+            targetLanguage: this.config.targetLanguage,
+            isFinal: false,
+            confidence,
+          } as SpeechResult)
         }
-        this.emit('interim', speechResult)
       }
     }
   }
 
+  /** 处理翻译流的响应（流式模式） */
+  private handleTranslateResponse(response: Record<string, unknown>): void {
+    const results = response.results as Array<Record<string, unknown>> | undefined
+    if (!results || results.length === 0) return
+
+    for (const result of results) {
+      const alternatives = result.alternatives as Array<Record<string, unknown>> | undefined
+      if (!alternatives || alternatives.length === 0) continue
+
+      const translation = (alternatives[0].transcript as string) || ''
+      if (!translation.trim()) continue
+
+      const isFinal = result.isFinal === true
+
+      this.latestTranslation = translation
+      if (isFinal) this.latestIsFinal = true
+      this.translationVersion++
+      this.tryFlushStreaming()
+    }
+  }
+
+  /** 尝试同步发送转写+翻译结果 */
+  private tryFlushStreaming(): void {
+    this.clearFlushTimer()
+
+    // 如果两个流都有新结果，立即同步发送
+    if (this.latestTranscript && this.latestTranslation) {
+      this.emitStreamingResult()
+      return
+    }
+
+    // 只有一个流有结果，等待 80ms 让另一个流追上
+    this.flushTimer = setTimeout(() => {
+      this.emitStreamingResult()
+    }, 80)
+  }
+
+  private emitStreamingResult(): void {
+    const original = this.latestTranscript
+    const translated = this.latestTranslation
+    if (!original && !translated) return
+
+    const isFinal = this.latestIsFinal
+
+    const speechResult: SpeechResult = {
+      original: original || translated,
+      translated: translated || '',
+      sourceLanguage: this.config.sourceLanguage,
+      targetLanguage: this.config.targetLanguage,
+      isFinal,
+      confidence: this.latestConfidence,
+    }
+
+    this.emit(isFinal ? 'result' : 'interim', speechResult)
+
+    if (isFinal) {
+      this.latestTranscript = ''
+      this.latestTranslation = ''
+      this.latestIsFinal = false
+      this.latestConfidence = undefined
+      this.transcriptVersion = 0
+      this.translationVersion = 0
+    }
+  }
+
+  private clearFlushTimer(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer)
+      this.flushTimer = null
+    }
+  }
+
+  // === 精确模式翻译 ===
+
   private async translateAndEmit(originalText: string, confidence?: number): Promise<void> {
     try {
       const translated = await this.translateText(originalText)
-
-      const speechResult: SpeechResult = {
+      this.emit('result', {
         original: originalText,
         translated,
         sourceLanguage: this.config.sourceLanguage,
         targetLanguage: this.config.targetLanguage,
         isFinal: true,
         confidence,
-      }
-      this.emit('result', speechResult)
+      } as SpeechResult)
     } catch {
-      const speechResult: SpeechResult = {
+      this.emit('result', {
         original: originalText,
         translated: originalText,
         sourceLanguage: this.config.sourceLanguage,
         targetLanguage: this.config.targetLanguage,
         isFinal: true,
         confidence,
-      }
-      this.emit('result', speechResult)
+      } as SpeechResult)
     }
   }
 
@@ -227,7 +364,6 @@ export class GoogleSpeechService extends EventEmitter {
       format: 'text',
     })
 
-    // 构建请求头
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'Content-Length': String(Buffer.byteLength(postData)),
@@ -238,11 +374,8 @@ export class GoogleSpeechService extends EventEmitter {
     if (apiKey) {
       path += `?key=${apiKey}`
     } else {
-      // 使用服务账号 access token（带缓存）
       const token = await this.getAccessToken()
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`
-      }
+      if (token) headers['Authorization'] = `Bearer ${token}`
     }
 
     return new Promise((resolve) => {
@@ -270,9 +403,7 @@ export class GoogleSpeechService extends EventEmitter {
     })
   }
 
-  /** 获取 access token（带缓存，token 有效期内不重复获取） */
   private async getAccessToken(): Promise<string | null> {
-    // token 在过期前 60 秒刷新
     if (this.cachedAccessToken && Date.now() < this.tokenExpiry - 60000) {
       return this.cachedAccessToken
     }
@@ -288,7 +419,6 @@ export class GoogleSpeechService extends EventEmitter {
 
       const result = await this.cachedAuthClient.getAccessToken()
       this.cachedAccessToken = result.token || null
-      // access token 通常有效期为 1 小时
       this.tokenExpiry = Date.now() + 3500 * 1000
       return this.cachedAccessToken
     } catch {
@@ -296,11 +426,13 @@ export class GoogleSpeechService extends EventEmitter {
     }
   }
 
+  // === 流管理 ===
+
   private handleStreamError(err: Error): void {
     if (!this.isStreaming) return
 
     console.error(`[语音服务] 流错误: ${err.message}`)
-    this.destroyStream()
+    this.destroyStreams()
 
     this.retryCount++
     if (this.retryCount > MAX_RETRIES) {
@@ -314,20 +446,27 @@ export class GoogleSpeechService extends EventEmitter {
     }
 
     const delay = Math.min(BASE_RETRY_DELAY_MS * Math.pow(2, this.retryCount - 1), 10000)
-    setTimeout(() => { if (this.isStreaming) this.createStream() }, delay)
+    setTimeout(() => { if (this.isStreaming) this.createStreams() }, delay)
   }
 
-  private destroyStream(): void {
-    if (this.recognizeStream) {
-      try { this.recognizeStream.end() } catch {}
-      this.recognizeStream = null
+  private destroyStreams(): void {
+    if (this.transcribeStream) {
+      try { this.transcribeStream.end() } catch {}
+      this.transcribeStream = null
+    }
+    if (this.translateStream) {
+      try { this.translateStream.end() } catch {}
+      this.translateStream = null
     }
   }
 
   private flushPendingAudio(): void {
-    if (this.pendingAudioChunks.length === 0 || !this.recognizeStream) return
+    if (this.pendingAudioChunks.length === 0) return
     for (const chunk of this.pendingAudioChunks) {
-      try { this.recognizeStream.write({ audio: chunk }) } catch { break }
+      this.writeToStream(this.transcribeStream, chunk)
+      if (this.config.translationMode === TranslationMode.STREAMING) {
+        this.writeToStream(this.translateStream, chunk)
+      }
     }
     this.pendingAudioChunks = []
   }
@@ -336,15 +475,15 @@ export class GoogleSpeechService extends EventEmitter {
     this.clearRestartTimer()
     this.restartTimer = setTimeout(() => {
       if (!this.isStreaming) return
-      this.destroyStream()
-      this.createStream()
+      this.destroyStreams()
+      this.createStreams()
     }, MAX_STREAM_DURATION_MS)
   }
 
   private scheduleRestart(): void {
     const elapsed = Date.now() - this.streamStartTime
     const delay = Math.max(MIN_RESTART_INTERVAL_MS - elapsed, 0)
-    setTimeout(() => { if (this.isStreaming) this.createStream() }, delay)
+    setTimeout(() => { if (this.isStreaming) this.createStreams() }, delay)
   }
 
   private clearRestartTimer(): void {

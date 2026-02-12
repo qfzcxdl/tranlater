@@ -25,12 +25,26 @@ export const LanguageLabels: Record<Language, string> = {
   [Language.ENGLISH]: 'English',
 }
 
+/** 翻译模式 */
+export enum TranslationMode {
+  /** 流式模式：使用 chirp_2 内置翻译，低延迟 */
+  STREAMING = 'streaming',
+  /** 精确模式：先转写再调用 Translate API 翻译，高准确度 */
+  ACCURATE = 'accurate',
+}
+
+export const TranslationModeLabels: Record<TranslationMode, string> = {
+  [TranslationMode.STREAMING]: '流式（低延迟）',
+  [TranslationMode.ACCURATE]: '精确（高准确度）',
+}
+
 /** 应用全局状态 */
 export interface AppState {
   status: AppStatus
   audioSources: AudioSource[]
   sourceLanguage: Language
   targetLanguage: Language
+  translationMode: TranslationMode
   error?: {
     code: string
     message: string
@@ -80,6 +94,7 @@ export const IPC_CHANNELS = {
 
   // 翻译控制
   TRANSLATION_SET_LANGUAGES: 'translation:setLanguages',
+  TRANSLATION_SET_MODE: 'translation:setMode',
   TRANSLATION_RESULT: 'translation:result',
   TRANSLATION_INTERIM: 'translation:interim',
 } as const

@@ -7,6 +7,8 @@ import {
   AudioSource,
   Language,
   LanguageLabels,
+  TranslationMode,
+  TranslationModeLabels,
 } from '../../../../shared/types'
 import type { AppState, DeviceAvailability } from '../../../../shared/types'
 import { AudioCaptureService } from '../../services/AudioCaptureService'
@@ -20,7 +22,7 @@ export const ControlWindow: React.FC = () => {
   const [sourceLanguage, setSourceLanguage] = useState<Language>(Language.CHINESE)
   const [targetLanguage, setTargetLanguage] = useState<Language>(Language.ENGLISH)
   const [audioSources, setAudioSources] = useState<AudioSource[]>([AudioSource.MICROPHONE])
-  // 默认麦克风可用（渲染进程通过 getUserMedia 请求权限，不依赖主进程检测）
+  const [translationMode, setTranslationMode] = useState<TranslationMode>(TranslationMode.STREAMING)
   const [devices, setDevices] = useState<DeviceAvailability>({ microphone: true, systemAudio: false })
   const [errorMessage, setErrorMessage] = useState<string>('')
   const [isLoading, setIsLoading] = useState(false)
@@ -37,6 +39,7 @@ export const ControlWindow: React.FC = () => {
         setSourceLanguage(state.sourceLanguage)
         setTargetLanguage(state.targetLanguage)
         setAudioSources(state.audioSources)
+        setTranslationMode(state.translationMode)
         setDevices(deviceInfo)
       } catch (err) {
         console.error('初始化失败:', err)
@@ -50,6 +53,7 @@ export const ControlWindow: React.FC = () => {
       setAudioSources(state.audioSources)
       setSourceLanguage(state.sourceLanguage)
       setTargetLanguage(state.targetLanguage)
+      setTranslationMode(state.translationMode)
       if (state.error) {
         setErrorMessage(state.error.message)
       } else {
@@ -167,8 +171,19 @@ export const ControlWindow: React.FC = () => {
     }
   }, [status, sourceLanguage])
 
+  // 切换翻译模式
+  const handleModeChange = useCallback(async (mode: TranslationMode) => {
+    try {
+      await window.electronAPI.setTranslationMode(mode)
+      setTranslationMode(mode)
+    } catch (err) {
+      console.error('切换翻译模式失败:', err)
+    }
+  }, [])
+
   const isRunning = status === AppStatus.RUNNING
   const languages = Object.values(Language)
+  const modes = Object.values(TranslationMode)
 
   return (
     <div className="control-window">
@@ -246,19 +261,36 @@ export const ControlWindow: React.FC = () => {
               </span>
             </label>
 
-            <label className={`source-option ${!devices.systemAudio ? 'unavailable' : ''}`}>
+            <label className="source-option">
               <input
                 type="checkbox"
                 checked={audioSources.includes(AudioSource.SYSTEM_AUDIO)}
                 onChange={() => handleAudioSourceToggle(AudioSource.SYSTEM_AUDIO)}
-                disabled={isRunning || !devices.systemAudio}
+                disabled={isRunning}
               />
               <span className="source-icon">&#x1F4BB;</span>
               <span className="source-text">
                 系统音频
-                {!devices.systemAudio && <span className="source-hint">（需开启屏幕录制权限）</span>}
+                {!devices.systemAudio && <span className="source-hint">（首次使用需授权屏幕录制）</span>}
               </span>
             </label>
+          </div>
+        </section>
+
+        {/* 翻译模式 */}
+        <section className="section">
+          <h2 className="section-title">翻译模式</h2>
+          <div className="mode-selector">
+            {modes.map(mode => (
+              <button
+                key={mode}
+                className={`btn-mode ${translationMode === mode ? 'active' : ''}`}
+                onClick={() => handleModeChange(mode)}
+                disabled={isRunning}
+              >
+                {translationMode === mode ? '✓ ' : ''}{TranslationModeLabels[mode]}
+              </button>
+            ))}
           </div>
         </section>
 

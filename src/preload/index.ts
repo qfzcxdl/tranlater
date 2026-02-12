@@ -3,7 +3,7 @@
 
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC_CHANNELS } from '../shared/types'
-import type { AudioSource, Language } from '../shared/types'
+import type { AudioSource, Language, TranslationMode } from '../shared/types'
 
 const electronAPI = {
   // === 应用控制 ===
@@ -35,6 +35,10 @@ const electronAPI = {
   /** 设置翻译语言对 */
   setLanguages: (source: Language, target: Language) =>
     ipcRenderer.invoke(IPC_CHANNELS.TRANSLATION_SET_LANGUAGES, source, target),
+
+  /** 设置翻译模式 */
+  setTranslationMode: (mode: TranslationMode) =>
+    ipcRenderer.invoke(IPC_CHANNELS.TRANSLATION_SET_MODE, mode),
 
   // === 事件监听 ===
 

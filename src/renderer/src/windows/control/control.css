@@ -331,3 +331,37 @@ body {
   color: var(--danger);
   line-height: 1.4;
 }
+
+/* 翻译模式选择器 */
+.mode-selector {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-mode {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--border-radius);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-mode:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--text-primary);
+}
+
+.btn-mode.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+}
+
+.btn-mode:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

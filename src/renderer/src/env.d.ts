@@ -1,6 +1,6 @@
 // 渲染进程全局类型声明
 
-import type { AppState, AudioSource, DeviceAvailability, Language, TranslationResult } from '../../shared/types'
+import type { AppState, AudioSource, DeviceAvailability, Language, TranslationMode, TranslationResult } from '../../shared/types'
 
 declare global {
   interface Window {
@@ -15,8 +15,9 @@ declare global {
       setAudioSources: (sources: AudioSource[]) => Promise<boolean>
       sendAudioData: (buffer: ArrayBuffer) => void
 
-      // 语言控制
+      // 语言和模式控制
       setLanguages: (source: Language, target: Language) => Promise<boolean>
+      setTranslationMode: (mode: TranslationMode) => Promise<boolean>
 
       // 事件监听
       onStateChanged: (cb: (state: AppState) => void) => () => void
