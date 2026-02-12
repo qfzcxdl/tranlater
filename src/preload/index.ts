@@ -1,54 +1,74 @@
 // Preload 脚本
-// 使用 contextBridge 安全地暴露 IPC API 给渲染进程
+// 通过 contextBridge 安全地将 IPC API 暴露给渲染进程
 
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer } from 'electron'
+import { IPC_CHANNELS } from '../shared/types'
+import type { AudioSource, Language } from '../shared/types'
 
-// 定义暴露给渲染进程的 API
 const electronAPI = {
-  // 应用控制
-  startTranslation: () => ipcRenderer.invoke('app:start'),
-  stopTranslation: () => ipcRenderer.invoke('app:stop'),
-  getAppState: () => ipcRenderer.invoke('app:getState'),
-  checkDevices: () => ipcRenderer.invoke('app:checkDevices'),
+  // === 应用控制 ===
 
-  // 音频源控制
-  setAudioSource: (source: string) => ipcRenderer.invoke('audio:setSource', source),
+  /** 开始实时翻译 */
+  startTranslation: () => ipcRenderer.invoke(IPC_CHANNELS.APP_START),
 
-  // 翻译模式控制
-  setTranslationMode: (mode: string) => ipcRenderer.invoke('translation:setMode', mode),
+  /** 停止实时翻译 */
+  stopTranslation: () => ipcRenderer.invoke(IPC_CHANNELS.APP_STOP),
 
-  // 语言设置
-  setLanguages: (sourceLanguage: string, targetLanguage: string) =>
-    ipcRenderer.invoke('translation:setLanguages', sourceLanguage, targetLanguage),
+  /** 获取当前应用状态 */
+  getAppState: () => ipcRenderer.invoke(IPC_CHANNELS.APP_GET_STATE),
 
-  // 事件监听
-  onStateChanged: (callback: (state: any) => void) => {
-    const listener = (_event: any, state: any) => callback(state);
-    ipcRenderer.on('app:stateChanged', listener);
-    return () => ipcRenderer.removeListener('app:stateChanged', listener);
+  /** 检查音频设备可用性 */
+  checkDevices: () => ipcRenderer.invoke(IPC_CHANNELS.APP_CHECK_DEVICES),
+
+  // === 音频控制 ===
+
+  /** 设置音频来源（支持多选） */
+  setAudioSources: (sources: AudioSource[]) =>
+    ipcRenderer.invoke(IPC_CHANNELS.AUDIO_SET_SOURCES, sources),
+
+  /** 发送音频数据到主进程（高频调用，使用 send 而非 invoke） */
+  sendAudioData: (audioBuffer: ArrayBuffer) =>
+    ipcRenderer.send(IPC_CHANNELS.AUDIO_DATA, audioBuffer),
+
+  // === 语言控制 ===
+
+  /** 设置翻译语言对 */
+  setLanguages: (source: Language, target: Language) =>
+    ipcRenderer.invoke(IPC_CHANNELS.TRANSLATION_SET_LANGUAGES, source, target),
+
+  // === 事件监听 ===
+
+  /** 监听应用状态变化 */
+  onStateChanged: (callback: (state: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: unknown) => callback(state)
+    ipcRenderer.on(IPC_CHANNELS.APP_STATE_CHANGED, listener)
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.APP_STATE_CHANGED, listener)
   },
 
-  onTranslationResult: (callback: (result: any) => void) => {
-    const listener = (_event: any, result: any) => callback(result);
-    ipcRenderer.on('translation:result', listener);
-    return () => ipcRenderer.removeListener('translation:result', listener);
+  /** 监听最终翻译结果 */
+  onTranslationResult: (callback: (result: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, result: unknown) => callback(result)
+    ipcRenderer.on(IPC_CHANNELS.TRANSLATION_RESULT, listener)
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.TRANSLATION_RESULT, listener)
   },
 
-  onTranslationInterim: (callback: (result: any) => void) => {
-    const listener = (_event: any, result: any) => callback(result);
-    ipcRenderer.on('translation:interim', listener);
-    return () => ipcRenderer.removeListener('translation:interim', listener);
+  /** 监听中间翻译结果（实时更新） */
+  onTranslationInterim: (callback: (result: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, result: unknown) => callback(result)
+    ipcRenderer.on(IPC_CHANNELS.TRANSLATION_INTERIM, listener)
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.TRANSLATION_INTERIM, listener)
   },
 
-  onError: (callback: (error: any) => void) => {
-    const listener = (_event: any, error: any) => callback(error);
-    ipcRenderer.on('app:error', listener);
-    return () => ipcRenderer.removeListener('app:error', listener);
+  /** 监听应用错误 */
+  onError: (callback: (error: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, error: unknown) => callback(error)
+    ipcRenderer.on(IPC_CHANNELS.APP_ERROR, listener)
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.APP_ERROR, listener)
   },
-};
+}
 
-// 暴露 API 到渲染进程
-contextBridge.exposeInMainWorld('electronAPI', electronAPI);
+// 将 API 暴露到渲染进程的 window.electronAPI
+contextBridge.exposeInMainWorld('electronAPI', electronAPI)
 
-// 类型定义（供 TypeScript 使用）
-export type ElectronAPI = typeof electronAPI;
+// 导出类型供 TypeScript 使用
+export type ElectronAPI = typeof electronAPI

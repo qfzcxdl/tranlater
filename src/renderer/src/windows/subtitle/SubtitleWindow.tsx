@@ -1,76 +1,113 @@
-// 字幕窗口主组件
+// 悬浮字幕窗口组件
+// 显示双语字幕，支持自动滚动和拖拽移动
 
-import React, { useState, useEffect } from 'react';
-import { SubtitleItem } from '../../../shared/types';
+import React, { useState, useEffect, useRef, useCallback } from 'react'
+import type { SubtitleItem, TranslationResult } from '../../../../shared/types'
+import './subtitle.css'
 
 declare global {
   interface Window {
-    electronAPI: any;
+    electronAPI: {
+      onTranslationResult: (cb: (result: TranslationResult) => void) => () => void
+      onTranslationInterim: (cb: (result: TranslationResult) => void) => () => void
+      [key: string]: unknown
+    }
   }
 }
 
-const MAX_SUBTITLES = 3;
-const SUBTITLE_DURATION = 10000; // 10秒
+/** 最大显示字幕条数 */
+const MAX_SUBTITLES = 5
+
+/** 字幕自动消失时间 (ms) */
+const SUBTITLE_TTL = 15000
 
 export const SubtitleWindow: React.FC = () => {
-  const [subtitles, setSubtitles] = useState<SubtitleItem[]>([]);
-  const [interimResult, setInterimResult] = useState<SubtitleItem | null>(null);
+  const [subtitles, setSubtitles] = useState<SubtitleItem[]>([])
+  const [interimResult, setInterimResult] = useState<SubtitleItem | null>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  // 自动滚动到底部
+  const scrollToBottom = useCallback(() => {
+    if (containerRef.current) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight
+    }
+  }, [])
 
   useEffect(() => {
     // 监听最终翻译结果
-    const unsubscribeResult = window.electronAPI.onTranslationResult((result: any) => {
+    const unsubResult = window.electronAPI.onTranslationResult((result: TranslationResult) => {
       const newSubtitle: SubtitleItem = {
-        id: `${result.timestamp}-${Math.random()}`,
+        id: `${result.timestamp}-${Math.random().toString(36).slice(2, 8)}`,
         original: result.original,
         translated: result.translated,
         timestamp: result.timestamp,
         isFinal: true,
-      };
+      }
 
-      setSubtitles((prev) => {
+      setSubtitles(prev => {
         // 清除中间结果
-        setInterimResult(null);
+        setInterimResult(null)
 
-        // 添加新字幕，保持最新的 MAX_SUBTITLES 条
-        const updated = [...prev, newSubtitle];
-        return updated.slice(-MAX_SUBTITLES);
-      });
+        // 添加新字幕，保持最大条数限制
+        const updated = [...prev, newSubtitle]
+        return updated.slice(-MAX_SUBTITLES)
+      })
 
-      // 设置定时器自动移除
+      // 设置自动消失定时器
       setTimeout(() => {
-        setSubtitles((prev) => prev.filter((s) => s.id !== newSubtitle.id));
-      }, SUBTITLE_DURATION);
-    });
+        setSubtitles(prev => prev.filter(s => s.id !== newSubtitle.id))
+      }, SUBTITLE_TTL)
+
+      // 滚动到底部
+      requestAnimationFrame(scrollToBottom)
+    })
 
     // 监听中间结果
-    const unsubscribeInterim = window.electronAPI.onTranslationInterim((result: any) => {
+    const unsubInterim = window.electronAPI.onTranslationInterim((result: TranslationResult) => {
       setInterimResult({
         id: 'interim',
         original: result.original,
         translated: result.translated,
         timestamp: result.timestamp,
         isFinal: false,
-      });
-    });
+      })
+
+      requestAnimationFrame(scrollToBottom)
+    })
 
     return () => {
-      unsubscribeResult();
-      unsubscribeInterim();
-    };
-  }, []);
+      unsubResult()
+      unsubInterim()
+    }
+  }, [scrollToBottom])
 
-  const displayItems = [...subtitles];
+  // 合并最终字幕和中间结果
+  const displayItems = [...subtitles]
   if (interimResult) {
-    displayItems.push(interimResult);
+    displayItems.push(interimResult)
   }
+
+  const isEmpty = displayItems.length === 0
 
   return (
     <div className="subtitle-window">
-      <div className="subtitle-container">
-        {displayItems.map((item) => (
+      {/* 拖拽区域 */}
+      <div className="drag-handle" title="拖拽移动字幕位置" />
+
+      {/* 字幕容器 */}
+      <div className="subtitle-container" ref={containerRef}>
+        {isEmpty && (
+          <div className="subtitle-placeholder">
+            等待语音输入...
+          </div>
+        )}
+
+        {displayItems.map((item, index) => (
           <div
             key={item.id}
-            className={`subtitle-item ${item.isFinal ? 'final' : 'interim'}`}
+            className={`subtitle-item ${item.isFinal ? 'final' : 'interim'} ${
+              index === displayItems.length - 1 ? 'latest' : ''
+            }`}
           >
             <div className="subtitle-original">{item.original}</div>
             <div className="subtitle-translated">{item.translated}</div>
@@ -78,5 +115,5 @@ export const SubtitleWindow: React.FC = () => {
         ))}
       </div>
     </div>
-  );
-};
+  )
+}

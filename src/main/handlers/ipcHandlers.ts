@@ -1,122 +1,223 @@
-// IPC 事件处理器
-// 处理来自渲染进程的请求
+// IPC 消息处理器
+// 连接渲染进程与主进程各服务
 
-import { ipcMain } from 'electron';
-import { AudioCaptureService } from '../services/AudioCaptureService';
-import { TranslationService } from '../services/TranslationService';
-import { WindowManager } from '../services/WindowManager';
-import { AudioSource } from '../types/audio';
-import { TranslationMode } from '../types/translation';
-import { AppStatus } from '../../../shared/types';
+import { ipcMain, desktopCapturer, session } from 'electron'
+import {
+  AppStatus,
+  AudioSource,
+  Language,
+  IPC_CHANNELS,
+} from '../../shared/types'
+import type { AppState, DeviceAvailability } from '../../shared/types'
+import { WindowManager } from '../services/WindowManager'
+import { GoogleSpeechService, SpeechResult } from '../services/GoogleSpeechService'
+import { checkMicrophonePermission, checkScreenRecordingPermission, checkGoogleCloudCredentials } from '../utils/permissions'
+import { AppError, ErrorCode, createCredentialsError, createPermissionError } from '../utils/errors'
 
-export function setupIpcHandlers(
-  audioService: AudioCaptureService,
-  translationService: TranslationService,
-  windowManager: WindowManager
-) {
-  let currentStatus: AppStatus = AppStatus.IDLE;
+/** 应用核心状态 */
+let appState: AppState = {
+  status: AppStatus.IDLE,
+  audioSources: [AudioSource.MICROPHONE],
+  sourceLanguage: Language.CHINESE,
+  targetLanguage: Language.ENGLISH,
+}
 
-  // 开始翻译
-  ipcMain.handle('app:start', async () => {
-    try {
-      console.log('Starting translation via IPC...');
+let speechService: GoogleSpeechService | null = null
+let windowManager: WindowManager
 
-      // 创建字幕窗口（如果未创建）
-      if (!windowManager.getSubtitleWindow()) {
-        windowManager.createSubtitleWindow();
+/** 注册所有 IPC 处理器 */
+export function registerIpcHandlers(wm: WindowManager): void {
+  windowManager = wm
+
+  // 注册系统音频捕获的 display media handler
+  registerDisplayMediaHandler()
+
+  // === 应用控制 ===
+
+  ipcMain.handle(IPC_CHANNELS.APP_GET_STATE, () => {
+    return appState
+  })
+
+  ipcMain.handle(IPC_CHANNELS.APP_CHECK_DEVICES, async (): Promise<DeviceAvailability> => {
+    const micAvailable = await checkMicrophonePermission()
+    const screenAvailable = checkScreenRecordingPermission()
+
+    return {
+      microphone: micAvailable,
+      systemAudio: screenAvailable,
+    }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.APP_START, async () => {
+    return startTranslation()
+  })
+
+  ipcMain.handle(IPC_CHANNELS.APP_STOP, () => {
+    return stopTranslation()
+  })
+
+  // === 音频控制 ===
+
+  ipcMain.handle(IPC_CHANNELS.AUDIO_SET_SOURCES, (_event, sources: AudioSource[]) => {
+    if (appState.status === AppStatus.RUNNING) {
+      throw new AppError(ErrorCode.CONFIG_ERROR, '请先停止翻译再切换音频源')
+    }
+    appState.audioSources = sources
+    broadcastState()
+    return true
+  })
+
+  // 接收来自渲染进程的音频数据
+  ipcMain.on(IPC_CHANNELS.AUDIO_DATA, (_event, audioBuffer: ArrayBuffer) => {
+    if (speechService && appState.status === AppStatus.RUNNING) {
+      speechService.writeAudio(Buffer.from(audioBuffer))
+    }
+  })
+
+  // === 翻译/语言控制 ===
+
+  ipcMain.handle(IPC_CHANNELS.TRANSLATION_SET_LANGUAGES, (_event, source: Language, target: Language) => {
+    appState.sourceLanguage = source
+    appState.targetLanguage = target
+
+    // 如果正在运行，更新语音服务的语言配置
+    if (speechService) {
+      speechService.setLanguages(source, target)
+    }
+
+    broadcastState()
+    return true
+  })
+
+  console.log('[IPC] 所有处理器已注册')
+}
+
+/** 注册 display media handler 以支持系统音频捕获 */
+function registerDisplayMediaHandler(): void {
+  session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+    desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
+      if (sources.length > 0) {
+        // 提供屏幕源并启用音频回环
+        callback({ video: sources[0], audio: 'loopback' })
+      } else {
+        callback({})
       }
+    }).catch(() => {
+      callback({})
+    })
+  })
+  console.log('[IPC] Display media handler 已注册（系统音频捕获）')
+}
 
-      // 启动音频捕获
-      await audioService.start();
+/** 开始翻译 */
+async function startTranslation(): Promise<boolean> {
+  if (appState.status === AppStatus.RUNNING) {
+    console.warn('[IPC] 翻译已在运行中')
+    return false
+  }
 
-      // 启动翻译流
-      await translationService.startStreaming();
+  // 检查 Google Cloud 凭证
+  const credentials = checkGoogleCloudCredentials()
+  if (!credentials.valid) {
+    const error = createCredentialsError()
+    updateState({ status: AppStatus.ERROR, error: error.toJSON() })
+    throw error
+  }
 
-      currentStatus = AppStatus.RUNNING;
-      windowManager.sendToControlWindow('app:stateChanged', {
-        status: currentStatus,
-      });
-
-      console.log('✓ Translation started via IPC');
-      return { success: true };
-    } catch (error) {
-      console.error('Failed to start translation:', error);
-      return { success: false, error: (error as Error).message };
+  // 检查音频源权限
+  if (appState.audioSources.includes(AudioSource.MICROPHONE)) {
+    const micOk = await checkMicrophonePermission()
+    if (!micOk) {
+      const error = createPermissionError('microphone')
+      updateState({ status: AppStatus.ERROR, error: error.toJSON() })
+      throw error
     }
-  });
+  }
 
-  // 停止翻译
-  ipcMain.handle('app:stop', async () => {
-    try {
-      console.log('Stopping translation via IPC...');
-
-      await translationService.stop();
-      await audioService.stop();
-
-      currentStatus = AppStatus.IDLE;
-      windowManager.sendToControlWindow('app:stateChanged', {
-        status: currentStatus,
-      });
-
-      console.log('✓ Translation stopped via IPC');
-      return { success: true };
-    } catch (error) {
-      console.error('Failed to stop translation:', error);
-      return { success: false, error: (error as Error).message };
+  if (appState.audioSources.includes(AudioSource.SYSTEM_AUDIO)) {
+    const screenOk = checkScreenRecordingPermission()
+    if (!screenOk) {
+      const error = createPermissionError('screen')
+      updateState({ status: AppStatus.ERROR, error: error.toJSON() })
+      throw error
     }
-  });
+  }
 
-  // 获取应用状态
-  ipcMain.handle('app:getState', () => {
-    return {
-      status: currentStatus,
-      audioSource: audioService.getCurrentSource(),
-      translationMode: translationService.getConfig().mode,
-      sourceLanguage: translationService.getConfig().sourceLanguage,
-      targetLanguage: translationService.getConfig().targetLanguage,
-    };
-  });
+  try {
+    // 创建语音服务
+    speechService = new GoogleSpeechService({
+      projectId: credentials.projectId!,
+      sourceLanguage: appState.sourceLanguage,
+      targetLanguage: appState.targetLanguage,
+      location: 'us-central1',
+    })
 
-  // 检查设备可用性
-  ipcMain.handle('app:checkDevices', () => {
-    return {
-      microphone: audioService.isSourceAvailable(AudioSource.MICROPHONE),
-      systemAudio: audioService.isSourceAvailable(AudioSource.SYSTEM_AUDIO),
-    };
-  });
+    // 监听翻译结果
+    speechService.on('result', (result: SpeechResult) => {
+      const translationResult = {
+        ...result,
+        timestamp: Date.now(),
+      }
+      windowManager.sendToSubtitle(IPC_CHANNELS.TRANSLATION_RESULT, translationResult)
+      windowManager.sendToControl(IPC_CHANNELS.TRANSLATION_RESULT, translationResult)
+    })
 
-  // 切换音频源
-  ipcMain.handle('audio:setSource', async (_event, source: AudioSource) => {
-    try {
-      await audioService.switchSource(source);
-      return { success: true };
-    } catch (error) {
-      console.error('Failed to set audio source:', error);
-      return { success: false, error: (error as Error).message };
-    }
-  });
+    speechService.on('interim', (result: SpeechResult) => {
+      const translationResult = {
+        ...result,
+        timestamp: Date.now(),
+      }
+      windowManager.sendToSubtitle(IPC_CHANNELS.TRANSLATION_INTERIM, translationResult)
+    })
 
-  // 切换翻译模式
-  ipcMain.handle('translation:setMode', async (_event, mode: TranslationMode) => {
-    try {
-      await translationService.switchMode(mode);
-      return { success: true };
-    } catch (error) {
-      console.error('Failed to set translation mode:', error);
-      return { success: false, error: (error as Error).message };
-    }
-  });
+    speechService.on('error', (error: AppError) => {
+      console.error('[IPC] 语音服务错误:', error.message)
+      windowManager.broadcast(IPC_CHANNELS.APP_ERROR, error.toJSON())
 
-  // 切换语言
-  ipcMain.handle('translation:setLanguages', async (_event, sourceLanguage: string, targetLanguage: string) => {
-    try {
-      await translationService.switchLanguages(sourceLanguage, targetLanguage);
-      return { success: true };
-    } catch (error) {
-      console.error('Failed to set languages:', error);
-      return { success: false, error: (error as Error).message };
-    }
-  });
+      if (!error.recoverable) {
+        stopTranslation()
+      }
+    })
 
-  console.log('✓ IPC handlers registered');
+    // 启动流式识别
+    speechService.startStreaming()
+
+    // 显示字幕窗口
+    windowManager.showSubtitle()
+
+    updateState({ status: AppStatus.RUNNING, error: undefined })
+    console.log('[IPC] 翻译已启动')
+    return true
+  } catch (err) {
+    const error = err instanceof AppError
+      ? err
+      : new AppError(ErrorCode.UNKNOWN_ERROR, `启动失败: ${(err as Error).message}`)
+
+    updateState({ status: AppStatus.ERROR, error: error.toJSON() })
+    throw error
+  }
+}
+
+/** 停止翻译 */
+function stopTranslation(): boolean {
+  if (speechService) {
+    speechService.destroy()
+    speechService = null
+  }
+
+  windowManager.hideSubtitle()
+  updateState({ status: AppStatus.IDLE, error: undefined })
+  console.log('[IPC] 翻译已停止')
+  return true
+}
+
+/** 更新状态并广播 */
+function updateState(partial: Partial<AppState>): void {
+  appState = { ...appState, ...partial }
+  broadcastState()
+}
+
+/** 广播状态到所有窗口 */
+function broadcastState(): void {
+  windowManager.broadcast(IPC_CHANNELS.APP_STATE_CHANGED, appState)
 }

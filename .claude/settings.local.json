@@ -37,7 +37,9 @@
       "Bash(kill -9 47904)",
       "Bash(cat << 'EOF'\n\n请在 VS Code 中执行以下操作：\n\n1. 按 Cmd+Shift+P（Mac）或 Ctrl+Shift+P（Windows/Linux）\n2. 输入 \"Reload Window\"\n3. 选择 \"Developer: Reload Window\"\n\n扩展会自动重新激活，daemon 会随之启动。\nEOF)",
       "Bash(npm install)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(npx electron-rebuild)",
+      "Bash(npm uninstall:*)"
     ]
   },
   "outputStyle": "Explanatory"

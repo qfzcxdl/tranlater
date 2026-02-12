@@ -1,51 +1,85 @@
-// 共享类型定义 - 主进程和渲染进程都会使用
+// 共享类型定义 - 主进程和渲染进程通用
 
+/** 应用运行状态 */
 export enum AppStatus {
   IDLE = 'idle',
   RUNNING = 'running',
   ERROR = 'error',
 }
 
+/** 音频来源类型 */
 export enum AudioSource {
   MICROPHONE = 'microphone',
   SYSTEM_AUDIO = 'system_audio',
 }
 
-export enum TranslationMode {
-  END_TO_END = 'e2e',          // chirp_2 内置翻译
-  STEP_BY_STEP = 'step',       // STT + Translation API
+/** 支持的语言 */
+export enum Language {
+  CHINESE = 'cmn-Hans-CN',
+  ENGLISH = 'en-US',
 }
 
+/** 语言显示名称映射 */
+export const LanguageLabels: Record<Language, string> = {
+  [Language.CHINESE]: '中文',
+  [Language.ENGLISH]: 'English',
+}
+
+/** 应用全局状态 */
 export interface AppState {
-  status: AppStatus;
-  audioSource: AudioSource;
-  translationMode: TranslationMode;
-  sourceLanguage: string;      // 'zh-CN' | 'en-US'
-  targetLanguage: string;      // 'en' | 'zh'
+  status: AppStatus
+  audioSources: AudioSource[]
+  sourceLanguage: Language
+  targetLanguage: Language
   error?: {
-    code: string;
-    message: string;
-  };
+    code: string
+    message: string
+  }
 }
 
+/** 音频设备可用性 */
 export interface DeviceAvailability {
-  microphone: boolean;
-  systemAudio: boolean;
+  microphone: boolean
+  systemAudio: boolean
 }
 
+/** 翻译结果（从主进程发送到渲染进程） */
 export interface TranslationResult {
-  original: string;
-  translated: string;
-  sourceLanguage: string;
-  targetLanguage: string;
-  isFinal: boolean;
-  timestamp: number;
+  original: string
+  translated: string
+  sourceLanguage: Language
+  targetLanguage: Language
+  isFinal: boolean
+  timestamp: number
+  confidence?: number
 }
 
+/** 字幕显示条目 */
 export interface SubtitleItem {
-  id: string;
-  original: string;
-  translated: string;
-  timestamp: number;
-  isFinal: boolean;
+  id: string
+  original: string
+  translated: string
+  timestamp: number
+  isFinal: boolean
 }
+
+/** IPC 通道名称常量 */
+export const IPC_CHANNELS = {
+  // 应用控制
+  APP_START: 'app:start',
+  APP_STOP: 'app:stop',
+  APP_GET_STATE: 'app:getState',
+  APP_CHECK_DEVICES: 'app:checkDevices',
+  APP_STATE_CHANGED: 'app:stateChanged',
+  APP_ERROR: 'app:error',
+
+  // 音频控制
+  AUDIO_SET_SOURCES: 'audio:setSources',
+  AUDIO_DATA: 'audio:data',
+  AUDIO_GET_DEVICES: 'audio:getDevices',
+
+  // 翻译控制
+  TRANSLATION_SET_LANGUAGES: 'translation:setLanguages',
+  TRANSLATION_RESULT: 'translation:result',
+  TRANSLATION_INTERIM: 'translation:interim',
+} as const

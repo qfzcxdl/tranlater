@@ -1,166 +1,156 @@
 // 窗口管理服务
-// 负责创建和管理控制窗口和字幕窗口
+// 负责创建和管理控制面板窗口与悬浮字幕窗口
 
-import { BrowserWindow, screen } from 'electron';
-import path from 'path';
+import { BrowserWindow, shell, screen } from 'electron'
+import { join } from 'path'
 
 export class WindowManager {
-  private controlWindow: BrowserWindow | null = null;
-  private subtitleWindow: BrowserWindow | null = null;
+  private controlWindow: BrowserWindow | null = null
+  private subtitleWindow: BrowserWindow | null = null
 
-  /**
-   * 创建控制窗口
-   */
+  /** 获取控制面板窗口 */
+  getControlWindow(): BrowserWindow | null {
+    return this.controlWindow
+  }
+
+  /** 获取字幕窗口 */
+  getSubtitleWindow(): BrowserWindow | null {
+    return this.subtitleWindow
+  }
+
+  /** 创建控制面板窗口 */
   createControlWindow(): BrowserWindow {
-    console.log('Creating control window...');
-
     this.controlWindow = new BrowserWindow({
-      width: 500,
-      height: 400,
-      resizable: true,
-      frame: true,
-      alwaysOnTop: false,
-      transparent: false,
+      width: 420,
+      height: 580,
+      minWidth: 380,
+      minHeight: 500,
+      title: 'Tranlater',
+      titleBarStyle: 'hiddenInset',
+      trafficLightPosition: { x: 15, y: 15 },
+      show: false,
       webPreferences: {
-        preload: path.join(__dirname, '../preload/index.js'),
+        preload: join(__dirname, '../preload/index.js'),
         contextIsolation: true,
         nodeIntegration: false,
+        sandbox: false,
       },
-      title: 'Tranlater - Control',
-    });
+    })
 
-    // 加载控制窗口页面
-    if (process.env.NODE_ENV === 'development') {
-      this.controlWindow.loadURL('http://localhost:5173/control.html');
-      this.controlWindow.webContents.openDevTools();
-    } else {
-      this.controlWindow.loadFile(
-        path.join(__dirname, '../renderer/control.html')
-      );
-    }
+    // 窗口准备好后显示，避免白屏闪烁
+    this.controlWindow.on('ready-to-show', () => {
+      this.controlWindow?.show()
+    })
+
+    // 在外部浏览器中打开链接
+    this.controlWindow.webContents.setWindowOpenHandler(({ url }) => {
+      shell.openExternal(url)
+      return { action: 'deny' }
+    })
 
     this.controlWindow.on('closed', () => {
-      console.log('Control window closed');
-      this.controlWindow = null;
-      // 控制窗口关闭时，关闭字幕窗口
-      this.closeSubtitleWindow();
-    });
+      this.controlWindow = null
+    })
 
-    console.log('✓ Control window created');
-    return this.controlWindow;
+    // 加载控制面板页面
+    if (process.env.ELECTRON_RENDERER_URL) {
+      this.controlWindow.loadURL(`${process.env.ELECTRON_RENDERER_URL}/control.html`)
+    } else {
+      this.controlWindow.loadFile(join(__dirname, '../renderer/control.html'))
+    }
+
+    return this.controlWindow
   }
 
-  /**
-   * 创建字幕窗口
-   * 置顶、穿透、透明背景
-   */
+  /** 创建悬浮字幕窗口 */
   createSubtitleWindow(): BrowserWindow {
-    console.log('Creating subtitle window...');
+    const primaryDisplay = screen.getPrimaryDisplay()
+    const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize
 
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const { width, height } = primaryDisplay.workAreaSize;
-
-    const subtitleHeight = 200;
-    const subtitleWidth = width;
+    // 字幕窗口默认宽度和位置：屏幕底部居中
+    const windowWidth = Math.min(800, screenWidth * 0.6)
+    const windowHeight = 180
+    const x = Math.round((screenWidth - windowWidth) / 2)
+    const y = screenHeight - windowHeight - 60
 
     this.subtitleWindow = new BrowserWindow({
-      width: subtitleWidth,
-      height: subtitleHeight,
-      x: 0,
-      y: height - subtitleHeight,
-      alwaysOnTop: true,
+      width: windowWidth,
+      height: windowHeight,
+      x,
+      y,
       transparent: true,
       frame: false,
-      resizable: false,
-      webPreferences: {
-        preload: path.join(__dirname, '../preload/index.js'),
-        contextIsolation: true,
-        nodeIntegration: false,
-      },
-      // macOS 特定配置
+      alwaysOnTop: true,
       hasShadow: false,
-      vibrancy: 'under-window', // 毛玻璃效果
-      visualEffectState: 'active',
-      // 点击穿透
       focusable: false,
       skipTaskbar: true,
-    });
+      resizable: true,
+      movable: true,
+      // macOS 特有: panel 类型允许悬浮在全屏应用之上
+      type: 'panel',
+      webPreferences: {
+        preload: join(__dirname, '../preload/index.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: false,
+      },
+    })
 
-    // 设置窗口忽略鼠标事件（穿透）
-    this.subtitleWindow.setIgnoreMouseEvents(true, { forward: true });
-
-    // 加载字幕窗口页面
-    if (process.env.NODE_ENV === 'development') {
-      this.subtitleWindow.loadURL('http://localhost:5173/subtitle.html');
-    } else {
-      this.subtitleWindow.loadFile(
-        path.join(__dirname, '../renderer/subtitle.html')
-      );
-    }
+    // 设置窗口层级为悬浮窗
+    this.subtitleWindow.setAlwaysOnTop(true, 'floating')
+    // 在所有工作区可见
+    this.subtitleWindow.setVisibleOnAllWorkspaces(true)
 
     this.subtitleWindow.on('closed', () => {
-      console.log('Subtitle window closed');
-      this.subtitleWindow = null;
-    });
+      this.subtitleWindow = null
+    })
 
-    console.log('✓ Subtitle window created');
-    return this.subtitleWindow;
-  }
-
-  /**
-   * 关闭字幕窗口
-   */
-  closeSubtitleWindow(): void {
-    if (this.subtitleWindow) {
-      this.subtitleWindow.close();
-      this.subtitleWindow = null;
+    // 加载字幕页面
+    if (process.env.ELECTRON_RENDERER_URL) {
+      this.subtitleWindow.loadURL(`${process.env.ELECTRON_RENDERER_URL}/subtitle.html`)
+    } else {
+      this.subtitleWindow.loadFile(join(__dirname, '../renderer/subtitle.html'))
     }
+
+    return this.subtitleWindow
   }
 
-  /**
-   * 获取窗口实例
-   */
-  getControlWindow(): BrowserWindow | null {
-    return this.controlWindow;
-  }
-
-  getSubtitleWindow(): BrowserWindow | null {
-    return this.subtitleWindow;
-  }
-
-  /**
-   * 向字幕窗口发送消息
-   */
-  sendToSubtitleWindow(channel: string, ...args: any[]): void {
-    if (this.subtitleWindow && !this.subtitleWindow.isDestroyed()) {
-      this.subtitleWindow.webContents.send(channel, ...args);
+  /** 显示字幕窗口 */
+  showSubtitle(): void {
+    if (!this.subtitleWindow) {
+      this.createSubtitleWindow()
     }
+    this.subtitleWindow?.show()
   }
 
-  /**
-   * 向控制窗口发送消息
-   */
-  sendToControlWindow(channel: string, ...args: any[]): void {
+  /** 隐藏字幕窗口 */
+  hideSubtitle(): void {
+    this.subtitleWindow?.hide()
+  }
+
+  /** 向控制面板发送消息 */
+  sendToControl(channel: string, ...args: unknown[]): void {
     if (this.controlWindow && !this.controlWindow.isDestroyed()) {
-      this.controlWindow.webContents.send(channel, ...args);
+      this.controlWindow.webContents.send(channel, ...args)
     }
   }
 
-  /**
-   * 显示字幕窗口
-   */
-  showSubtitleWindow(): void {
-    if (this.subtitleWindow) {
-      this.subtitleWindow.show();
+  /** 向字幕窗口发送消息 */
+  sendToSubtitle(channel: string, ...args: unknown[]): void {
+    if (this.subtitleWindow && !this.subtitleWindow.isDestroyed()) {
+      this.subtitleWindow.webContents.send(channel, ...args)
     }
   }
 
-  /**
-   * 隐藏字幕窗口
-   */
-  hideSubtitleWindow(): void {
-    if (this.subtitleWindow) {
-      this.subtitleWindow.hide();
-    }
+  /** 向所有窗口广播消息 */
+  broadcast(channel: string, ...args: unknown[]): void {
+    this.sendToControl(channel, ...args)
+    this.sendToSubtitle(channel, ...args)
+  }
+
+  /** 关闭所有窗口 */
+  closeAll(): void {
+    this.controlWindow?.close()
+    this.subtitleWindow?.close()
   }
 }

@@ -8,7 +8,10 @@
       "cwd": "${workspaceFolder}",
       "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/electron-vite",
       "args": ["--inspect=5858", "dev"],
-      "outputCapture": "std",
+      "outFiles": ["${workspaceFolder}/out/**/*.js"],
+      "sourceMaps": true,
+      "smartStep": true,
+      "console": "integratedTerminal",
       "env": {
         "NODE_ENV": "development"
       }
@@ -19,19 +22,17 @@
       "request": "attach",
       "port": 9222,
       "webRoot": "${workspaceFolder}/src/renderer",
-      "timeout": 30000,
-      "urlFilter": "http://localhost:5173/*"
+      "urlFilter": "http://localhost:5173/*",
+      "sourceMaps": true
     }
   ],
   "compounds": [
     {
       "name": "Debug Electron (All Processes)",
-      "configurations": ["Debug Main Process", "Debug Renderer Process"],
-      "presentation": {
-        "hidden": false,
-        "group": "electron",
-        "order": 1
-      }
+      "configurations": [
+        "Debug Main Process",
+        "Debug Renderer Process"
+      ]
     }
   ]
 }

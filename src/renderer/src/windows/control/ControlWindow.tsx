@@ -1,153 +1,314 @@
-// 控制窗口主组件
+// 控制面板窗口组件
+// 提供语言选择、音频源选择、开始/停止翻译等功能
 
-import React, { useState, useEffect } from 'react';
-import { AppStatus, AudioSource, TranslationMode } from '../../../shared/types';
+import React, { useState, useEffect, useCallback } from 'react'
+import {
+  AppStatus,
+  AudioSource,
+  Language,
+  LanguageLabels,
+} from '../../../../shared/types'
+import type { AppState, DeviceAvailability } from '../../../../shared/types'
+import { AudioCaptureService } from '../../services/AudioCaptureService'
+import './control.css'
 
 declare global {
   interface Window {
-    electronAPI: any;
+    electronAPI: {
+      startTranslation: () => Promise<boolean>
+      stopTranslation: () => Promise<boolean>
+      getAppState: () => Promise<AppState>
+      checkDevices: () => Promise<DeviceAvailability>
+      setAudioSources: (sources: AudioSource[]) => Promise<boolean>
+      setLanguages: (source: Language, target: Language) => Promise<boolean>
+      sendAudioData: (buffer: ArrayBuffer) => void
+      onStateChanged: (cb: (state: AppState) => void) => () => void
+      onTranslationResult: (cb: (result: unknown) => void) => () => void
+      onError: (cb: (error: { code: string; message: string }) => void) => () => void
+    }
   }
 }
 
-export const ControlWindow: React.FC = () => {
-  const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
-  const [audioSource, setAudioSource] = useState<AudioSource>(AudioSource.MICROPHONE);
-  const [translationMode, setTranslationMode] = useState<TranslationMode>(TranslationMode.STEP_BY_STEP);
-  const [deviceAvailability, setDeviceAvailability] = useState({
-    microphone: true,
-    systemAudio: false,
-  });
+// 音频捕获服务单例
+const audioCaptureService = new AudioCaptureService()
 
-  // 初始化
+export const ControlWindow: React.FC = () => {
+  const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE)
+  const [sourceLanguage, setSourceLanguage] = useState<Language>(Language.CHINESE)
+  const [targetLanguage, setTargetLanguage] = useState<Language>(Language.ENGLISH)
+  const [audioSources, setAudioSources] = useState<AudioSource[]>([AudioSource.MICROPHONE])
+  const [devices, setDevices] = useState<DeviceAvailability>({ microphone: true, systemAudio: false })
+  const [errorMessage, setErrorMessage] = useState<string>('')
+  const [isLoading, setIsLoading] = useState(false)
+
+  // 初始化：获取应用状态和设备信息
   useEffect(() => {
     const init = async () => {
       try {
-        const state = await window.electronAPI.getAppState();
-        setStatus(state.status);
-        setAudioSource(state.audioSource);
-        setTranslationMode(state.translationMode);
-
-        const devices = await window.electronAPI.checkDevices();
-        setDeviceAvailability(devices);
-      } catch (error) {
-        console.error('Failed to initialize:', error);
+        const [state, deviceInfo] = await Promise.all([
+          window.electronAPI.getAppState(),
+          window.electronAPI.checkDevices(),
+        ])
+        setStatus(state.status)
+        setSourceLanguage(state.sourceLanguage)
+        setTargetLanguage(state.targetLanguage)
+        setAudioSources(state.audioSources)
+        setDevices(deviceInfo)
+      } catch (err) {
+        console.error('初始化失败:', err)
       }
-    };
-
-    init();
+    }
+    init()
 
     // 监听状态变化
-    const unsubscribe = window.electronAPI.onStateChanged((state: any) => {
-      setStatus(state.status);
-      setAudioSource(state.audioSource);
-      setTranslationMode(state.translationMode);
-    });
+    const unsubState = window.electronAPI.onStateChanged((state: AppState) => {
+      setStatus(state.status)
+      setAudioSources(state.audioSources)
+      setSourceLanguage(state.sourceLanguage)
+      setTargetLanguage(state.targetLanguage)
+      if (state.error) {
+        setErrorMessage(state.error.message)
+      } else {
+        setErrorMessage('')
+      }
+    })
 
-    return () => unsubscribe();
-  }, []);
+    // 监听错误
+    const unsubError = window.electronAPI.onError((error) => {
+      setErrorMessage(error.message)
+      setIsLoading(false)
+    })
 
-  // 开始/停止翻译
-  const handleToggle = async () => {
+    return () => {
+      unsubState()
+      unsubError()
+    }
+  }, [])
+
+  // 切换翻译状态
+  const handleToggle = useCallback(async () => {
+    setIsLoading(true)
+    setErrorMessage('')
+
     try {
       if (status === AppStatus.RUNNING) {
-        await window.electronAPI.stopTranslation();
+        // 停止：先停止音频捕获，再停止翻译
+        await audioCaptureService.stopCapture()
+        await window.electronAPI.stopTranslation()
       } else {
-        await window.electronAPI.startTranslation();
+        // 启动：先启动翻译服务，再开始音频捕获
+        await window.electronAPI.startTranslation()
+        await audioCaptureService.startCapture(audioSources)
       }
-    } catch (error) {
-      console.error('Failed to toggle translation:', error);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '操作失败'
+      setErrorMessage(message)
+      // 确保出错时停止音频捕获
+      await audioCaptureService.stopCapture().catch(() => {})
+    } finally {
+      setIsLoading(false)
     }
-  };
+  }, [status, audioSources])
 
   // 切换音频源
-  const handleAudioSourceChange = async (source: AudioSource) => {
-    try {
-      await window.electronAPI.setAudioSource(source);
-      setAudioSource(source);
-    } catch (error) {
-      console.error('Failed to set audio source:', error);
-    }
-  };
+  const handleAudioSourceToggle = useCallback(async (source: AudioSource) => {
+    if (status === AppStatus.RUNNING) return
 
-  // 切换翻译模式
-  const handleModeChange = async (mode: TranslationMode) => {
+    const newSources = audioSources.includes(source)
+      ? audioSources.filter(s => s !== source)
+      : [...audioSources, source]
+
+    // 至少保留一个音频源
+    if (newSources.length === 0) return
+
     try {
-      await window.electronAPI.setTranslationMode(mode);
-      setTranslationMode(mode);
-    } catch (error) {
-      console.error('Failed to set translation mode:', error);
+      await window.electronAPI.setAudioSources(newSources)
+      setAudioSources(newSources)
+    } catch (err) {
+      console.error('切换音频源失败:', err)
     }
-  };
+  }, [status, audioSources])
+
+  // 交换语言方向
+  const handleSwapLanguages = useCallback(async () => {
+    if (status === AppStatus.RUNNING) return
+
+    const newSource = targetLanguage
+    const newTarget = sourceLanguage
+
+    try {
+      await window.electronAPI.setLanguages(newSource, newTarget)
+      setSourceLanguage(newSource)
+      setTargetLanguage(newTarget)
+    } catch (err) {
+      console.error('切换语言失败:', err)
+    }
+  }, [status, sourceLanguage, targetLanguage])
+
+  // 设置源语言
+  const handleSourceLanguageChange = useCallback(async (lang: Language) => {
+    if (status === AppStatus.RUNNING) return
+    // 如果源和目标相同，自动交换
+    const newTarget = lang === targetLanguage
+      ? (lang === Language.CHINESE ? Language.ENGLISH : Language.CHINESE)
+      : targetLanguage
+
+    try {
+      await window.electronAPI.setLanguages(lang, newTarget)
+      setSourceLanguage(lang)
+      setTargetLanguage(newTarget)
+    } catch (err) {
+      console.error('设置语言失败:', err)
+    }
+  }, [status, targetLanguage])
+
+  // 设置目标语言
+  const handleTargetLanguageChange = useCallback(async (lang: Language) => {
+    if (status === AppStatus.RUNNING) return
+    const newSource = lang === sourceLanguage
+      ? (lang === Language.CHINESE ? Language.ENGLISH : Language.CHINESE)
+      : sourceLanguage
+
+    try {
+      await window.electronAPI.setLanguages(newSource, lang)
+      setSourceLanguage(newSource)
+      setTargetLanguage(lang)
+    } catch (err) {
+      console.error('设置语言失败:', err)
+    }
+  }, [status, sourceLanguage])
+
+  const isRunning = status === AppStatus.RUNNING
+  const languages = Object.values(Language)
 
   return (
     <div className="control-window">
+      {/* 标题栏拖拽区域 */}
+      <div className="titlebar-drag-region" />
+
       <header className="header">
-        <h1>🎤 Tranlater</h1>
-        <p className="subtitle">实时翻译控制面板</p>
+        <h1 className="app-title">Tranlater</h1>
+        <p className="app-subtitle">实时语音翻译</p>
       </header>
 
       <main className="content">
+        {/* 语言选择 */}
+        <section className="section">
+          <h2 className="section-title">翻译方向</h2>
+          <div className="language-selector">
+            <div className="language-group">
+              <label className="language-label">源语言</label>
+              <div className="language-buttons">
+                {languages.map(lang => (
+                  <button
+                    key={`source-${lang}`}
+                    className={`btn-lang ${sourceLanguage === lang ? 'active' : ''}`}
+                    onClick={() => handleSourceLanguageChange(lang)}
+                    disabled={isRunning}
+                  >
+                    {LanguageLabels[lang]}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button
+              className="btn-swap"
+              onClick={handleSwapLanguages}
+              disabled={isRunning}
+              title="交换语言方向"
+            >
+              &#x21C4;
+            </button>
+
+            <div className="language-group">
+              <label className="language-label">目标语言</label>
+              <div className="language-buttons">
+                {languages.map(lang => (
+                  <button
+                    key={`target-${lang}`}
+                    className={`btn-lang ${targetLanguage === lang ? 'active' : ''}`}
+                    onClick={() => handleTargetLanguageChange(lang)}
+                    disabled={isRunning}
+                  >
+                    {LanguageLabels[lang]}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+
         {/* 音频源选择 */}
         <section className="section">
-          <h2>音频源</h2>
-          <div className="button-group">
-            <button
-              className={`btn ${audioSource === AudioSource.MICROPHONE ? 'active' : ''} ${!deviceAvailability.microphone ? 'disabled' : ''}`}
-              onClick={() => handleAudioSourceChange(AudioSource.MICROPHONE)}
-              disabled={!deviceAvailability.microphone || status === AppStatus.RUNNING}
-            >
-              🎤 麦克风
-              {!deviceAvailability.microphone && ' (不可用)'}
-            </button>
-            <button
-              className={`btn ${audioSource === AudioSource.SYSTEM_AUDIO ? 'active' : ''} ${!deviceAvailability.systemAudio ? 'disabled' : ''}`}
-              onClick={() => handleAudioSourceChange(AudioSource.SYSTEM_AUDIO)}
-              disabled={!deviceAvailability.systemAudio || status === AppStatus.RUNNING}
-            >
-              💻 系统音频
-              {!deviceAvailability.systemAudio && ' (需安装 BlackHole)'}
-            </button>
+          <h2 className="section-title">音频来源</h2>
+          <div className="audio-sources">
+            <label className={`source-option ${!devices.microphone ? 'unavailable' : ''}`}>
+              <input
+                type="checkbox"
+                checked={audioSources.includes(AudioSource.MICROPHONE)}
+                onChange={() => handleAudioSourceToggle(AudioSource.MICROPHONE)}
+                disabled={isRunning || !devices.microphone}
+              />
+              <span className="source-icon">&#x1F3A4;</span>
+              <span className="source-text">
+                麦克风
+                {!devices.microphone && <span className="source-hint">（未授权）</span>}
+              </span>
+            </label>
+
+            <label className={`source-option ${!devices.systemAudio ? 'unavailable' : ''}`}>
+              <input
+                type="checkbox"
+                checked={audioSources.includes(AudioSource.SYSTEM_AUDIO)}
+                onChange={() => handleAudioSourceToggle(AudioSource.SYSTEM_AUDIO)}
+                disabled={isRunning || !devices.systemAudio}
+              />
+              <span className="source-icon">&#x1F4BB;</span>
+              <span className="source-text">
+                系统音频
+                {!devices.systemAudio && <span className="source-hint">（需开启屏幕录制权限）</span>}
+              </span>
+            </label>
           </div>
         </section>
 
-        {/* 翻译模式选择 */}
-        <section className="section">
-          <h2>翻译模式</h2>
-          <div className="button-group">
-            <button
-              className={`btn ${translationMode === TranslationMode.END_TO_END ? 'active' : ''}`}
-              onClick={() => handleModeChange(TranslationMode.END_TO_END)}
-              disabled={status === AppStatus.RUNNING}
-            >
-              ⚡ 端到端 (速度优先)
-            </button>
-            <button
-              className={`btn ${translationMode === TranslationMode.STEP_BY_STEP ? 'active' : ''}`}
-              onClick={() => handleModeChange(TranslationMode.STEP_BY_STEP)}
-              disabled={status === AppStatus.RUNNING}
-            >
-              🎯 分步 (质量优先)
-            </button>
-          </div>
-        </section>
-
-        {/* 控制按钮 */}
-        <section className="section">
+        {/* 主控制按钮 */}
+        <section className="section control-section">
           <button
-            className={`btn-main ${status === AppStatus.RUNNING ? 'stop' : 'start'}`}
+            className={`btn-main ${isRunning ? 'stop' : 'start'} ${isLoading ? 'loading' : ''}`}
             onClick={handleToggle}
+            disabled={isLoading}
           >
-            {status === AppStatus.RUNNING ? '⏸ 停止翻译' : '▶️ 开始翻译'}
+            {isLoading
+              ? '处理中...'
+              : isRunning
+                ? '停止翻译'
+                : '开始翻译'
+            }
           </button>
         </section>
 
-        {/* 状态显示 */}
-        <section className="status">
-          <div className={`status-indicator ${status === AppStatus.RUNNING ? 'running' : 'idle'}`}>
-            {status === AppStatus.RUNNING ? '● 运行中' : '○ 已停止'}
+        {/* 状态指示 */}
+        <section className="status-section">
+          <div className={`status-indicator ${status}`}>
+            <span className="status-dot" />
+            <span className="status-text">
+              {status === AppStatus.RUNNING && '翻译中'}
+              {status === AppStatus.IDLE && '就绪'}
+              {status === AppStatus.ERROR && '错误'}
+            </span>
           </div>
         </section>
+
+        {/* 错误信息 */}
+        {errorMessage && (
+          <div className="error-banner">
+            <span className="error-icon">&#x26A0;</span>
+            <span className="error-text">{errorMessage}</span>
+          </div>
+        )}
       </main>
     </div>
-  );
-};
+  )
+}

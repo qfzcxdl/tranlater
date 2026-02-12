@@ -4,11 +4,14 @@
     "composite": true,
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "types": ["node", "electron"]
+    "outDir": "./out",
+    "declaration": true,
+    "types": ["node"]
   },
   "include": [
     "src/main/**/*",
     "src/preload/**/*",
+    "src/shared/**/*",
     "electron.vite.config.ts"
   ]
 }
