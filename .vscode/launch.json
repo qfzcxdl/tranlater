@@ -1,0 +1,37 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Main Process",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/electron-vite",
+      "args": ["--inspect=5858", "dev"],
+      "outputCapture": "std",
+      "env": {
+        "NODE_ENV": "development"
+      }
+    },
+    {
+      "name": "Debug Renderer Process",
+      "type": "chrome",
+      "request": "attach",
+      "port": 9222,
+      "webRoot": "${workspaceFolder}/src/renderer",
+      "timeout": 30000,
+      "urlFilter": "http://localhost:5173/*"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Debug Electron (All Processes)",
+      "configurations": ["Debug Main Process", "Debug Renderer Process"],
+      "presentation": {
+        "hidden": false,
+        "group": "electron",
+        "order": 1
+      }
+    }
+  ]
+}
