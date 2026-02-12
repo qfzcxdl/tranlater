@@ -22,9 +22,9 @@ export class WindowManager {
   createControlWindow(): BrowserWindow {
     this.controlWindow = new BrowserWindow({
       width: 420,
-      height: 580,
+      height: 660,
       minWidth: 380,
-      minHeight: 500,
+      minHeight: 600,
       title: 'Tranlater',
       titleBarStyle: 'hiddenInset',
       trafficLightPosition: { x: 15, y: 15 },
@@ -68,8 +68,8 @@ export class WindowManager {
     const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize
 
     // 字幕窗口默认宽度和位置：屏幕底部居中
-    const windowWidth = Math.min(800, screenWidth * 0.6)
-    const windowHeight = 180
+    const windowWidth = Math.min(1000, screenWidth * 0.7)
+    const windowHeight = 240
     const x = Math.round((screenWidth - windowWidth) / 2)
     const y = screenHeight - windowHeight - 60
 
@@ -145,8 +145,8 @@ export class WindowManager {
     if (!this.subtitleWindow || this.subtitleWindow.isDestroyed()) return
     const primaryDisplay = screen.getPrimaryDisplay()
     const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize
-    const windowWidth = Math.min(800, screenWidth * 0.6)
-    const windowHeight = 180
+    const windowWidth = Math.min(1000, screenWidth * 0.7)
+    const windowHeight = 240
     const x = Math.round((screenWidth - windowWidth) / 2)
     const y = screenHeight - windowHeight - 60
     this.subtitleWindow.setBounds({ x, y, width: windowWidth, height: windowHeight })

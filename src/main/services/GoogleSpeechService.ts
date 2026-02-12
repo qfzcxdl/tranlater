@@ -24,6 +24,11 @@ const MIN_RESTART_INTERVAL_MS = 1000
 const MAX_RETRIES = 5
 const BASE_RETRY_DELAY_MS = 500
 
+// 客户端主动断句阈值
+const MAX_INTERIM_LENGTH = 80       // interim 文本超过此字符数时强制断句
+const MAX_INTERIM_DURATION_MS = 4000 // interim 持续超过此时间强制断句
+const INTERIM_STABLE_TIMEOUT_MS = 1500 // interim 文本稳定（未变化）超过此时间强制断句
+
 export interface SpeechServiceConfig {
   projectId: string
   sourceLanguage: Language
@@ -56,6 +61,12 @@ export class GoogleSpeechService extends EventEmitter {
   private pendingInterimOriginal = ''
   private pendingInterimConfidence: number | undefined = undefined
   private speechEndTimer: NodeJS.Timeout | null = null
+
+  // 客户端主动断句相关
+  private interimStartTime = 0           // 当前 interim 片段的开始时间
+  private lastInterimText = ''           // 上次 interim 文本（用于检测稳定性）
+  private interimStableTimer: NodeJS.Timeout | null = null  // interim 稳定超时计时器
+  private forceFinalTimer: NodeJS.Timeout | null = null     // 强制断句超时计时器
 
   private isStreaming = false
   private streamStartTime = 0
@@ -112,12 +123,15 @@ export class GoogleSpeechService extends EventEmitter {
     this.isStreaming = false
     this.clearRestartTimer()
     this.clearFlushTimer()
+    this.clearClientSegmentTimers()
     this.destroyStreams()
     this.pendingAudioChunks = []
     this.latestTranscript = ''
     this.latestTranslation = ''
     this.pendingInterimOriginal = ''
     this.pendingInterimConfidence = undefined
+    this.interimStartTime = 0
+    this.lastInterimText = ''
   }
 
   writeAudio(audioData: Buffer): void {
@@ -239,7 +253,6 @@ export class GoogleSpeechService extends EventEmitter {
     // 检查语音活动事件（用于快速断句）
     const speechEventType = response.speechEventType as string | undefined
     if (speechEventType === 'SPEECH_ACTIVITY_END') {
-      // 语音结束事件：如果有未确认的 interim 结果，强制作为 final 发送
       this.handleSpeechEnd()
       return
     }
@@ -257,53 +270,148 @@ export class GoogleSpeechService extends EventEmitter {
       const isFinal = result.isFinal === true
       const confidence = (alternatives[0].confidence as number) ?? undefined
 
-      if (this.config.translationMode === TranslationMode.STREAMING) {
-        // 流式模式：更新转写缓冲，触发同步发送
-        this.latestTranscript = transcript
-        this.latestIsFinal = isFinal
-        this.latestConfidence = confidence
-        this.transcriptVersion++
-        this.tryFlushStreaming()
-      } else {
-        // 精确模式
-        if (isFinal) {
-          this.pendingInterimOriginal = ''
-          this.translateAndEmit(transcript, confidence)
+      if (isFinal) {
+        // 服务端返回 final 结果：清除客户端断句计时器
+        this.clearClientSegmentTimers()
+        this.pendingInterimOriginal = ''
+        this.interimStartTime = 0
+        this.lastInterimText = ''
+
+        if (this.config.translationMode === TranslationMode.STREAMING) {
+          this.latestTranscript = transcript
+          this.latestIsFinal = true
+          this.latestConfidence = confidence
+          this.transcriptVersion++
+          this.tryFlushStreaming()
         } else {
-          // 记录 pending interim 用于语音结束强制确认
-          this.pendingInterimOriginal = transcript
-          this.pendingInterimConfidence = confidence
-          this.emit('interim', {
-            original: transcript,
-            translated: '',
-            sourceLanguage: this.config.sourceLanguage,
-            targetLanguage: this.config.targetLanguage,
-            isFinal: false,
-            confidence,
-          } as SpeechResult)
+          this.translateAndEmit(transcript, confidence)
         }
+      } else {
+        // interim 结果：检查是否需要客户端主动断句
+        this.handleInterimResult(transcript, confidence)
       }
+    }
+  }
+
+  /** 处理 interim 结果，包含客户端主动断句逻辑 */
+  private handleInterimResult(transcript: string, confidence?: number): void {
+    const now = Date.now()
+
+    // 首次 interim，记录开始时间
+    if (this.interimStartTime === 0) {
+      this.interimStartTime = now
+      this.startForceFinalTimer()
+    }
+
+    // 检查文本长度阈值：超过 MAX_INTERIM_LENGTH 字符强制断句
+    if (transcript.length >= MAX_INTERIM_LENGTH) {
+      this.forceEmitAsFinal(transcript, confidence)
+      return
+    }
+
+    // 检查持续时间阈值：超过 MAX_INTERIM_DURATION_MS 强制断句
+    if (now - this.interimStartTime >= MAX_INTERIM_DURATION_MS && transcript.length > 20) {
+      this.forceEmitAsFinal(transcript, confidence)
+      return
+    }
+
+    // 检查稳定性：文本是否与上次相同
+    if (transcript === this.lastInterimText) {
+      // 文本未变，如果稳定超时计时器没启动，启动它
+      if (!this.interimStableTimer) {
+        this.interimStableTimer = setTimeout(() => {
+          if (this.pendingInterimOriginal) {
+            this.forceEmitAsFinal(this.pendingInterimOriginal, this.pendingInterimConfidence)
+          }
+        }, INTERIM_STABLE_TIMEOUT_MS)
+      }
+    } else {
+      // 文本变化了，重置稳定计时器
+      this.clearInterimStableTimer()
+      this.lastInterimText = transcript
+    }
+
+    // 正常发送 interim 事件
+    this.pendingInterimOriginal = transcript
+    this.pendingInterimConfidence = confidence
+
+    if (this.config.translationMode === TranslationMode.STREAMING) {
+      this.latestTranscript = transcript
+      this.latestIsFinal = false
+      this.latestConfidence = confidence
+      this.transcriptVersion++
+      this.tryFlushStreaming()
+    } else {
+      this.emit('interim', {
+        original: transcript,
+        translated: '',
+        sourceLanguage: this.config.sourceLanguage,
+        targetLanguage: this.config.targetLanguage,
+        isFinal: false,
+        confidence,
+      } as SpeechResult)
+    }
+  }
+
+  /** 客户端强制将当前 interim 作为 final 发送 */
+  private forceEmitAsFinal(transcript: string, confidence?: number): void {
+    this.clearClientSegmentTimers()
+    this.pendingInterimOriginal = ''
+    this.interimStartTime = 0
+    this.lastInterimText = ''
+
+    if (this.config.translationMode === TranslationMode.STREAMING) {
+      this.latestTranscript = transcript
+      this.latestIsFinal = true
+      this.latestConfidence = confidence
+      this.transcriptVersion++
+      this.clearFlushTimer()
+      this.emitStreamingResult()
+    } else {
+      this.translateAndEmit(transcript, confidence)
     }
   }
 
   /** 语音活动结束时，强制将 pending interim 作为 final 发送 */
   private handleSpeechEnd(): void {
-    if (this.config.translationMode === TranslationMode.ACCURATE) {
-      // 精确模式：如果有 pending interim 文本，强制作为 final 翻译
-      if (this.pendingInterimOriginal) {
-        const text = this.pendingInterimOriginal
-        const conf = this.pendingInterimConfidence
-        this.pendingInterimOriginal = ''
-        this.pendingInterimConfidence = undefined
-        this.translateAndEmit(text, conf)
-      }
-    } else {
-      // 流式模式：如果有未 flush 的 interim，强制 flush 为 final
+    if (this.pendingInterimOriginal) {
+      this.forceEmitAsFinal(this.pendingInterimOriginal, this.pendingInterimConfidence)
+    } else if (this.config.translationMode === TranslationMode.STREAMING) {
       if (this.latestTranscript && !this.latestIsFinal) {
         this.latestIsFinal = true
         this.clearFlushTimer()
         this.emitStreamingResult()
       }
+    }
+  }
+
+  /** 启动强制断句超时计时器 */
+  private startForceFinalTimer(): void {
+    this.clearForceFinalTimer()
+    this.forceFinalTimer = setTimeout(() => {
+      if (this.pendingInterimOriginal) {
+        this.forceEmitAsFinal(this.pendingInterimOriginal, this.pendingInterimConfidence)
+      }
+    }, MAX_INTERIM_DURATION_MS)
+  }
+
+  /** 清除客户端断句相关的所有计时器 */
+  private clearClientSegmentTimers(): void {
+    this.clearInterimStableTimer()
+    this.clearForceFinalTimer()
+  }
+
+  private clearInterimStableTimer(): void {
+    if (this.interimStableTimer) {
+      clearTimeout(this.interimStableTimer)
+      this.interimStableTimer = null
+    }
+  }
+
+  private clearForceFinalTimer(): void {
+    if (this.forceFinalTimer) {
+      clearTimeout(this.forceFinalTimer)
+      this.forceFinalTimer = null
     }
   }
 

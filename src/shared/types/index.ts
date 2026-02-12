@@ -27,15 +27,15 @@ export const LanguageLabels: Record<Language, string> = {
 
 /** 翻译模式 */
 export enum TranslationMode {
-  /** 流式模式：使用 chirp_2 内置翻译，低延迟 */
-  STREAMING = 'streaming',
   /** 精确模式：先转写再调用 Translate API 翻译，高准确度 */
   ACCURATE = 'accurate',
+  /** 流式模式：使用 chirp_2 内置翻译，低延迟 */
+  STREAMING = 'streaming',
 }
 
 export const TranslationModeLabels: Record<TranslationMode, string> = {
-  [TranslationMode.STREAMING]: '流式（低延迟）',
   [TranslationMode.ACCURATE]: '精确（高准确度）',
+  [TranslationMode.STREAMING]: '流式（低延迟）',
 }
 
 /** 应用全局状态 */
