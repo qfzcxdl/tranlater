@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:www.google.com)",
+      "Bash(open:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(gh pr:*)",
+      "Bash(glab mr view:*)",
+      "Bash(curl:*)",
+      "Bash(glab auth:*)",
+      "Bash(python scripts/run.py:*)",
+      "Bash(go build:*)",
+      "Bash(go generate:*)",
+      "Bash(make:*)",
+      "Bash(go test:*)",
+      "Read(./**.go)"
+    ],
+    "defaultMode": "bypassPermissions"
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "context7",
+    "deepwiki",
+    "sequential-thinking",
+    "serena"
+  ],
+  "enabledPlugins": {
+    "feature-dev@claude-plugins-official": true,
+    "commit-commands@claude-plugins-official": true,
+    "code-review@claude-plugins-official": true,
+    "gopls-lsp@claude-plugins-official": true,
+    "ralph-wiggum@claude-code-plugins": true
+  }
+}

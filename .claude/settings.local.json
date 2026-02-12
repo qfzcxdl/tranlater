@@ -1,0 +1,42 @@
+{
+  "env": {
+    "CLAUDE_CODE_TASK_LIST_ID": "tst-cursor-extensions",
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(gh pr:*)",
+      "Bash(env:*)",
+      "Bash(glab mr view:*)",
+      "Bash(curl:*)",
+      "Bash(glab auth:*)",
+      "Bash(GITLAB_HOST=git.garena.com glab mr view:*)",
+      "mcp__serena__check_onboarding_performed",
+      "mcp__serena__list_dir",
+      "mcp__serena__search_for_pattern",
+      "mcp__serena__get_symbols_overview",
+      "Bash(grep:*)",
+      "Bash(go mod edit:*)",
+      "Bash(git rev-parse:*)",
+      "mcp__serena__find_symbol",
+      "Bash(go build:*)",
+      "Bash(go generate:*)",
+      "Bash(make:*)",
+      "Bash(go test:*)",
+      "Read(./**.go)",
+      "Skill(superpowers:brainstorming)",
+      "Skill(superpowers:brainstorming:*)",
+      "mcp__serena__initial_instructions",
+      "Bash(pnpm run lint:fix)",
+      "Bash(pnpm run fmt)",
+      "Bash(python3:*)",
+      "mcp__serena__find_file",
+      "Bash(lsof -i :13141)",
+      "Bash(kill -9 47904)",
+      "Bash(cat << 'EOF'\n\n请在 VS Code 中执行以下操作：\n\n1. 按 Cmd+Shift+P（Mac）或 Ctrl+Shift+P（Windows/Linux）\n2. 输入 \"Reload Window\"\n3. 选择 \"Developer: Reload Window\"\n\n扩展会自动重新激活，daemon 会随之启动。\nEOF)"
+    ]
+  },
+  "outputStyle": "Explanatory"
+}

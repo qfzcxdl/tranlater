@@ -1,0 +1,29 @@
+[tool.poetry]
+name = "md2docx"
+version = "1.0.0"
+description = "Markdown to DOCX converter with Mermaid diagram support"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+packages = [{include = "md2docx", from = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+md-to-docx = "^0.1.8"
+colorama = "^0.4.6"
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.9.0"
+
+[tool.poetry.scripts]
+md2docx = "md2docx.cli:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
