@@ -11,13 +11,47 @@ const SUBTITLE_TTL = 30000
 export const SubtitleWindow: React.FC = () => {
   const [subtitles, setSubtitles] = useState<SubtitleItem[]>([])
   const [interimResult, setInterimResult] = useState<SubtitleItem | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null)
 
   // 自动滚动到底部
   const scrollToBottom = useCallback(() => {
     if (containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight
     }
+  }, [])
+
+  // 拖拽移动字幕窗口
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!dragStartRef.current) return
+      const deltaX = e.screenX - dragStartRef.current.x
+      const deltaY = e.screenY - dragStartRef.current.y
+      dragStartRef.current = { x: e.screenX, y: e.screenY }
+      window.electronAPI.moveSubtitleWindow(deltaX, deltaY)
+    }
+
+    const handleMouseUp = () => {
+      dragStartRef.current = null
+      setIsDragging(false)
+    }
+
+    if (isDragging) {
+      window.addEventListener('mousemove', handleMouseMove)
+      window.addEventListener('mouseup', handleMouseUp)
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isDragging])
+
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    dragStartRef.current = { x: e.screenX, y: e.screenY }
+    setIsDragging(true)
   }, [])
 
   useEffect(() => {
@@ -77,9 +111,13 @@ export const SubtitleWindow: React.FC = () => {
   const isEmpty = displayItems.length === 0
 
   return (
-    <div className="subtitle-window">
+    <div className={`subtitle-window ${isDragging ? 'dragging' : ''}`}>
       {/* 拖拽区域 */}
-      <div className="drag-handle" title="拖拽移动字幕位置" />
+      <div
+        className="drag-handle"
+        title="拖拽移动字幕位置"
+        onMouseDown={handleDragStart}
+      />
 
       {/* 字幕容器 */}
       <div className="subtitle-container" ref={containerRef}>
@@ -97,9 +135,13 @@ export const SubtitleWindow: React.FC = () => {
             }`}
           >
             <div className="subtitle-original">{item.original}</div>
-            {item.translated && item.translated !== item.original && (
+            {item.isFinal && item.translated ? (
               <div className="subtitle-translated">{item.translated}</div>
-            )}
+            ) : item.isFinal && !item.translated ? (
+              <div className="subtitle-translated translating">翻译中...</div>
+            ) : item.translated ? (
+              <div className="subtitle-translated">{item.translated}</div>
+            ) : null}
           </div>
         ))}
       </div>

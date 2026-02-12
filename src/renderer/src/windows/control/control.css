@@ -365,3 +365,62 @@ body {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* 字幕窗口控制 */
+.subtitle-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.subtitle-size-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.control-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.btn-size {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--border-radius);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-size:hover {
+  border-color: var(--primary);
+  color: var(--text-primary);
+  background: rgba(79, 195, 247, 0.1);
+}
+
+.btn-reset {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--border-radius);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-reset:hover {
+  border-color: var(--primary);
+  color: var(--text-primary);
+}
+
+.hint-text {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: 0.7;
+}

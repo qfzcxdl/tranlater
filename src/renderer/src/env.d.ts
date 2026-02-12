@@ -19,6 +19,12 @@ declare global {
       setLanguages: (source: Language, target: Language) => Promise<boolean>
       setTranslationMode: (mode: TranslationMode) => Promise<boolean>
 
+      // 窗口控制
+      moveSubtitleWindow: (deltaX: number, deltaY: number) => void
+      resizeSubtitleWindow: (width: number, height: number) => void
+      getSubtitleBounds: () => Promise<{ x: number; y: number; width: number; height: number } | null>
+      resetSubtitlePosition: () => Promise<boolean>
+
       // 事件监听
       onStateChanged: (cb: (state: AppState) => void) => () => void
       onTranslationResult: (cb: (result: TranslationResult) => void) => () => void

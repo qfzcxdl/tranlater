@@ -52,6 +52,11 @@ export class GoogleSpeechService extends EventEmitter {
   // 翻译流（仅流式模式下运行）
   private translateStream: GrpcStream | null = null
 
+  // 语音活动检测：最近一次未确认的 interim 结果
+  private pendingInterimOriginal = ''
+  private pendingInterimConfidence: number | undefined = undefined
+  private speechEndTimer: NodeJS.Timeout | null = null
+
   private isStreaming = false
   private streamStartTime = 0
   private restartTimer: NodeJS.Timeout | null = null
@@ -111,6 +116,8 @@ export class GoogleSpeechService extends EventEmitter {
     this.pendingAudioChunks = []
     this.latestTranscript = ''
     this.latestTranslation = ''
+    this.pendingInterimOriginal = ''
+    this.pendingInterimConfidence = undefined
   }
 
   writeAudio(audioData: Buffer): void {
@@ -157,7 +164,13 @@ export class GoogleSpeechService extends EventEmitter {
             languageCodes: [sourceLanguage],
             model: 'chirp_2',
           },
-          streamingFeatures: { interimResults: true },
+          streamingFeatures: {
+            interimResults: true,
+            enableVoiceActivityEvents: true,
+            voiceActivityTimeout: {
+              speechEndTimeout: { seconds: 0, nanos: 500000000 }, // 500ms
+            },
+          },
         },
       })
 
@@ -188,7 +201,13 @@ export class GoogleSpeechService extends EventEmitter {
                 targetLanguage: targetLanguage,
               },
             },
-            streamingFeatures: { interimResults: true },
+            streamingFeatures: {
+              interimResults: true,
+              enableVoiceActivityEvents: true,
+              voiceActivityTimeout: {
+                speechEndTimeout: { seconds: 0, nanos: 500000000 }, // 500ms
+              },
+            },
           },
         })
 
@@ -217,6 +236,14 @@ export class GoogleSpeechService extends EventEmitter {
 
   /** 处理转写流的响应 */
   private handleTranscribeResponse(response: Record<string, unknown>): void {
+    // 检查语音活动事件（用于快速断句）
+    const speechEventType = response.speechEventType as string | undefined
+    if (speechEventType === 'SPEECH_ACTIVITY_END') {
+      // 语音结束事件：如果有未确认的 interim 结果，强制作为 final 发送
+      this.handleSpeechEnd()
+      return
+    }
+
     const results = response.results as Array<Record<string, unknown>> | undefined
     if (!results || results.length === 0) return
 
@@ -240,8 +267,12 @@ export class GoogleSpeechService extends EventEmitter {
       } else {
         // 精确模式
         if (isFinal) {
+          this.pendingInterimOriginal = ''
           this.translateAndEmit(transcript, confidence)
         } else {
+          // 记录 pending interim 用于语音结束强制确认
+          this.pendingInterimOriginal = transcript
+          this.pendingInterimConfidence = confidence
           this.emit('interim', {
             original: transcript,
             translated: '',
@@ -251,6 +282,27 @@ export class GoogleSpeechService extends EventEmitter {
             confidence,
           } as SpeechResult)
         }
+      }
+    }
+  }
+
+  /** 语音活动结束时，强制将 pending interim 作为 final 发送 */
+  private handleSpeechEnd(): void {
+    if (this.config.translationMode === TranslationMode.ACCURATE) {
+      // 精确模式：如果有 pending interim 文本，强制作为 final 翻译
+      if (this.pendingInterimOriginal) {
+        const text = this.pendingInterimOriginal
+        const conf = this.pendingInterimConfidence
+        this.pendingInterimOriginal = ''
+        this.pendingInterimConfidence = undefined
+        this.translateAndEmit(text, conf)
+      }
+    } else {
+      // 流式模式：如果有未 flush 的 interim，强制 flush 为 final
+      if (this.latestTranscript && !this.latestIsFinal) {
+        this.latestIsFinal = true
+        this.clearFlushTimer()
+        this.emitStreamingResult()
       }
     }
   }
@@ -330,26 +382,31 @@ export class GoogleSpeechService extends EventEmitter {
   // === 精确模式翻译 ===
 
   private async translateAndEmit(originalText: string, confidence?: number): Promise<void> {
+    // 先立即发送一个带原文的 interim 结果，让用户看到转写内容
+    this.emit('interim', {
+      original: originalText,
+      translated: '',
+      sourceLanguage: this.config.sourceLanguage,
+      targetLanguage: this.config.targetLanguage,
+      isFinal: false,
+      confidence,
+    } as SpeechResult)
+
+    let translated = originalText
     try {
-      const translated = await this.translateText(originalText)
-      this.emit('result', {
-        original: originalText,
-        translated,
-        sourceLanguage: this.config.sourceLanguage,
-        targetLanguage: this.config.targetLanguage,
-        isFinal: true,
-        confidence,
-      } as SpeechResult)
-    } catch {
-      this.emit('result', {
-        original: originalText,
-        translated: originalText,
-        sourceLanguage: this.config.sourceLanguage,
-        targetLanguage: this.config.targetLanguage,
-        isFinal: true,
-        confidence,
-      } as SpeechResult)
+      translated = await this.translateText(originalText)
+    } catch (err) {
+      console.error('[语音服务] 翻译失败，使用原文:', err)
     }
+
+    this.emit('result', {
+      original: originalText,
+      translated,
+      sourceLanguage: this.config.sourceLanguage,
+      targetLanguage: this.config.targetLanguage,
+      isFinal: true,
+      confidence,
+    } as SpeechResult)
   }
 
   private async translateText(text: string): Promise<string> {
@@ -378,7 +435,7 @@ export class GoogleSpeechService extends EventEmitter {
       if (token) headers['Authorization'] = `Bearer ${token}`
     }
 
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const req = https.request({
         hostname: 'translation.googleapis.com',
         path,
@@ -390,14 +447,25 @@ export class GoogleSpeechService extends EventEmitter {
         res.on('end', () => {
           try {
             const parsed = JSON.parse(data)
-            resolve(parsed.data?.translations?.[0]?.translatedText || text)
+            const translatedText = parsed.data?.translations?.[0]?.translatedText
+            if (translatedText) {
+              resolve(translatedText)
+            } else if (parsed.error) {
+              console.error('[翻译API] 错误:', parsed.error.message || JSON.stringify(parsed.error))
+              reject(new Error(parsed.error.message || 'Translation API error'))
+            } else {
+              resolve(text)
+            }
           } catch {
             resolve(text)
           }
         })
       })
 
-      req.on('error', () => resolve(text))
+      req.on('error', (err) => {
+        console.error('[翻译API] 网络错误:', err.message)
+        reject(err)
+      })
       req.write(postData)
       req.end()
     })

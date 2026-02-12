@@ -40,6 +40,24 @@ const electronAPI = {
   setTranslationMode: (mode: TranslationMode) =>
     ipcRenderer.invoke(IPC_CHANNELS.TRANSLATION_SET_MODE, mode),
 
+  // === 窗口控制 ===
+
+  /** 移动字幕窗口（增量移动） */
+  moveSubtitleWindow: (deltaX: number, deltaY: number) =>
+    ipcRenderer.send(IPC_CHANNELS.WINDOW_MOVE_SUBTITLE, deltaX, deltaY),
+
+  /** 调整字幕窗口大小 */
+  resizeSubtitleWindow: (width: number, height: number) =>
+    ipcRenderer.send(IPC_CHANNELS.WINDOW_RESIZE_SUBTITLE, width, height),
+
+  /** 获取字幕窗口当前位置和大小 */
+  getSubtitleBounds: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.WINDOW_GET_SUBTITLE_BOUNDS),
+
+  /** 重置字幕窗口到默认位置 */
+  resetSubtitlePosition: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.WINDOW_RESET_SUBTITLE_POSITION),
+
   // === 事件监听 ===
 
   /** 监听应用状态变化 */

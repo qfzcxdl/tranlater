@@ -19,8 +19,8 @@ import { AppError, ErrorCode, createCredentialsError, createPermissionError } fr
 let appState: AppState = {
   status: AppStatus.IDLE,
   audioSources: [AudioSource.MICROPHONE],
-  sourceLanguage: Language.CHINESE,
-  targetLanguage: Language.ENGLISH,
+  sourceLanguage: Language.ENGLISH,
+  targetLanguage: Language.CHINESE,
   translationMode: TranslationMode.ACCURATE,
 }
 
@@ -97,6 +97,36 @@ export function registerIpcHandlers(wm: WindowManager): void {
     }
 
     broadcastState()
+    return true
+  })
+
+  // === 窗口控制 ===
+
+  ipcMain.on(IPC_CHANNELS.WINDOW_MOVE_SUBTITLE, (_event, deltaX: number, deltaY: number) => {
+    const subtitleWin = windowManager.getSubtitleWindow()
+    if (subtitleWin && !subtitleWin.isDestroyed()) {
+      const [x, y] = subtitleWin.getPosition()
+      subtitleWin.setPosition(Math.round(x + deltaX), Math.round(y + deltaY))
+    }
+  })
+
+  ipcMain.on(IPC_CHANNELS.WINDOW_RESIZE_SUBTITLE, (_event, width: number, height: number) => {
+    const subtitleWin = windowManager.getSubtitleWindow()
+    if (subtitleWin && !subtitleWin.isDestroyed()) {
+      subtitleWin.setSize(Math.round(width), Math.round(height))
+    }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WINDOW_GET_SUBTITLE_BOUNDS, () => {
+    const subtitleWin = windowManager.getSubtitleWindow()
+    if (subtitleWin && !subtitleWin.isDestroyed()) {
+      return subtitleWin.getBounds()
+    }
+    return null
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WINDOW_RESET_SUBTITLE_POSITION, () => {
+    windowManager.resetSubtitlePosition()
     return true
   })
 

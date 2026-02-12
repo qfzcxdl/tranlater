@@ -82,7 +82,6 @@ export class WindowManager {
       frame: false,
       alwaysOnTop: true,
       hasShadow: false,
-      focusable: false,
       skipTaskbar: true,
       resizable: true,
       movable: true,
@@ -99,6 +98,16 @@ export class WindowManager {
     this.subtitleWindow.setAlwaysOnTop(true, 'floating')
     // 在所有工作区可见
     this.subtitleWindow.setVisibleOnAllWorkspaces(true)
+
+    // 防止字幕窗口抢占焦点：获得焦点后立即归还
+    this.subtitleWindow.on('focus', () => {
+      // 短暂延迟后 blur，允许拖拽操作完成
+      setTimeout(() => {
+        if (this.subtitleWindow && !this.subtitleWindow.isDestroyed()) {
+          this.subtitleWindow.blur()
+        }
+      }, 100)
+    })
 
     this.subtitleWindow.on('closed', () => {
       this.subtitleWindow = null
@@ -117,9 +126,9 @@ export class WindowManager {
   /** 显示字幕窗口 */
   showSubtitle(): void {
     if (!this.subtitleWindow) {
-      this.createSubtitleWindow()
-      this.subtitleWindow?.webContents.once('did-finish-load', () => {
-        this.subtitleWindow?.show()
+      const win = this.createSubtitleWindow()
+      win.webContents.once('did-finish-load', () => {
+        if (!win.isDestroyed()) win.show()
       })
     } else {
       this.subtitleWindow.show()
@@ -129,6 +138,18 @@ export class WindowManager {
   /** 隐藏字幕窗口 */
   hideSubtitle(): void {
     this.subtitleWindow?.hide()
+  }
+
+  /** 重置字幕窗口到屏幕底部居中 */
+  resetSubtitlePosition(): void {
+    if (!this.subtitleWindow || this.subtitleWindow.isDestroyed()) return
+    const primaryDisplay = screen.getPrimaryDisplay()
+    const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize
+    const windowWidth = Math.min(800, screenWidth * 0.6)
+    const windowHeight = 180
+    const x = Math.round((screenWidth - windowWidth) / 2)
+    const y = screenHeight - windowHeight - 60
+    this.subtitleWindow.setBounds({ x, y, width: windowWidth, height: windowHeight })
   }
 
   /** 向控制面板发送消息 */

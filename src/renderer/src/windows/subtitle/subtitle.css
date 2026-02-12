@@ -20,21 +20,31 @@ body {
   padding: 4px;
 }
 
+.subtitle-window.dragging {
+  cursor: grabbing;
+}
+
 /* 拖拽手柄 - 顶部窄条 */
 .drag-handle {
-  height: 6px;
-  min-height: 6px;
-  background: rgba(255, 255, 255, 0.15);
-  border-radius: 3px;
+  height: 8px;
+  min-height: 8px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
   margin: 0 auto 4px;
-  width: 60px;
+  width: 80px;
   cursor: grab;
-  -webkit-app-region: drag;
   transition: background 0.2s;
+  user-select: none;
 }
 
 .drag-handle:hover {
-  background: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.drag-handle:active,
+.subtitle-window.dragging .drag-handle {
+  cursor: grabbing;
+  background: rgba(255, 255, 255, 0.5);
 }
 
 /* 字幕容器 */
@@ -49,7 +59,6 @@ body {
   background: rgba(0, 0, 0, 0.75);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-
   /* 自定义滚动条 */
   scrollbar-width: none;
 }
@@ -83,7 +92,9 @@ body {
 }
 
 .subtitle-item.final.latest {
-  background: rgba(79, 195, 247, 0.1);
+  background: rgba(79, 195, 247, 0.12);
+  border-left: 3px solid rgba(79, 195, 247, 0.6);
+  padding-left: 9px;
 }
 
 /* 中间结果（正在识别中） */
@@ -94,25 +105,31 @@ body {
 
 /* 原文 */
 .subtitle-original {
-  font-size: 15px;
-  color: rgba(255, 255, 255, 0.95);
-  line-height: 1.4;
-  margin-bottom: 2px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #ffffff;
+  line-height: 1.5;
+  margin-bottom: 3px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
 }
 
 /* 译文 */
 .subtitle-translated {
-  font-size: 14px;
-  color: var(--accent, #4fc3f7);
-  line-height: 1.4;
+  font-size: 17px;
+  font-weight: 500;
+  color: #4fc3f7;
+  line-height: 1.5;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
 .subtitle-item.interim .subtitle-original {
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(255, 255, 255, 0.7);
+  font-weight: 500;
 }
 
 .subtitle-item.interim .subtitle-translated {
-  color: rgba(79, 195, 247, 0.5);
+  color: rgba(79, 195, 247, 0.6);
+  font-weight: 400;
 }
 
 /* 进入动画 */
@@ -134,4 +151,9 @@ body {
 
 .subtitle-item.final:first-child:not(.latest) {
   opacity: 0.4;
+}
+
+.subtitle-translated.translating {
+  opacity: 0.5;
+  font-style: italic;
 }

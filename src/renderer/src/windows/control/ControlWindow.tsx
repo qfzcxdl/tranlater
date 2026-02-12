@@ -181,6 +181,26 @@ export const ControlWindow: React.FC = () => {
     }
   }, [])
 
+  // 字幕窗口大小控制
+  const handleSubtitleSize = useCallback(async (size: 'small' | 'medium' | 'large') => {
+    const sizeMap = {
+      small: { width: 500, height: 120 },
+      medium: { width: 800, height: 180 },
+      large: { width: 1000, height: 260 },
+    }
+    const { width, height } = sizeMap[size]
+    window.electronAPI.resizeSubtitleWindow(width, height)
+  }, [])
+
+  // 重置字幕窗口位置
+  const handleResetSubtitlePosition = useCallback(async () => {
+    try {
+      await window.electronAPI.resetSubtitlePosition()
+    } catch (err) {
+      console.error('重置字幕位置失败:', err)
+    }
+  }, [])
+
   const isRunning = status === AppStatus.RUNNING
   const languages = Object.values(Language)
   const modes = Object.values(TranslationMode)
@@ -293,6 +313,25 @@ export const ControlWindow: React.FC = () => {
             ))}
           </div>
         </section>
+
+        {/* 字幕窗口控制 */}
+        {isRunning && (
+          <section className="section">
+            <h2 className="section-title">字幕窗口</h2>
+            <div className="subtitle-controls">
+              <div className="subtitle-size-group">
+                <span className="control-label">大小：</span>
+                <button className="btn-size" onClick={() => handleSubtitleSize('small')}>小</button>
+                <button className="btn-size" onClick={() => handleSubtitleSize('medium')}>中</button>
+                <button className="btn-size" onClick={() => handleSubtitleSize('large')}>大</button>
+              </div>
+              <button className="btn-reset" onClick={handleResetSubtitlePosition}>
+                重置位置
+              </button>
+            </div>
+            <p className="hint-text">拖拽字幕窗口顶部白色手柄可移动位置</p>
+          </section>
+        )}
 
         {/* 主控制按钮 */}
         <section className="section control-section">
