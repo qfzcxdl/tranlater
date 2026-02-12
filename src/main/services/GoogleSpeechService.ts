@@ -67,6 +67,8 @@ export class GoogleSpeechService extends EventEmitter {
   private lastInterimText = ''           // 上次 interim 文本（用于检测稳定性）
   private interimStableTimer: NodeJS.Timeout | null = null  // interim 稳定超时计时器
   private forceFinalTimer: NodeJS.Timeout | null = null     // 强制断句超时计时器
+  private lastForcedFinalText = ''       // 上次客户端强制断句的文本（用于去重）
+  private lastForcedFinalTime = 0        // 上次客户端强制断句的时间
 
   private isStreaming = false
   private streamStartTime = 0
@@ -132,6 +134,8 @@ export class GoogleSpeechService extends EventEmitter {
     this.pendingInterimConfidence = undefined
     this.interimStartTime = 0
     this.lastInterimText = ''
+    this.lastForcedFinalText = ''
+    this.lastForcedFinalTime = 0
   }
 
   writeAudio(audioData: Buffer): void {
@@ -277,6 +281,13 @@ export class GoogleSpeechService extends EventEmitter {
         this.interimStartTime = 0
         this.lastInterimText = ''
 
+        // 去重：如果与客户端强制断句的内容高度重叠，跳过
+        if (this.isDuplicateOfForcedFinal(transcript)) {
+          this.lastForcedFinalText = ''
+          continue
+        }
+        this.lastForcedFinalText = ''
+
         if (this.config.translationMode === TranslationMode.STREAMING) {
           this.latestTranscript = transcript
           this.latestIsFinal = true
@@ -360,6 +371,10 @@ export class GoogleSpeechService extends EventEmitter {
     this.interimStartTime = 0
     this.lastInterimText = ''
 
+    // 记录强制断句内容和时间，用于后续去重
+    this.lastForcedFinalText = transcript
+    this.lastForcedFinalTime = Date.now()
+
     if (this.config.translationMode === TranslationMode.STREAMING) {
       this.latestTranscript = transcript
       this.latestIsFinal = true
@@ -413,6 +428,33 @@ export class GoogleSpeechService extends EventEmitter {
       clearTimeout(this.forceFinalTimer)
       this.forceFinalTimer = null
     }
+  }
+
+  /** 检查服务端 final 是否与客户端强制 final 重复 */
+  private isDuplicateOfForcedFinal(serverText: string): boolean {
+    if (!this.lastForcedFinalText) return false
+    // 超过 10 秒的强制断句不再匹配
+    if (Date.now() - this.lastForcedFinalTime > 10000) return false
+
+    const forced = this.lastForcedFinalText.trim().toLowerCase()
+    const server = serverText.trim().toLowerCase()
+
+    // 完全相同
+    if (forced === server) return true
+    // 服务端文本包含强制断句文本（服务端可能补全了后续内容）
+    if (server.startsWith(forced)) return true
+    // 强制断句文本包含服务端文本
+    if (forced.startsWith(server)) return true
+    // 高度重叠：共同前缀超过 80%
+    let commonLen = 0
+    const minLen = Math.min(forced.length, server.length)
+    for (let i = 0; i < minLen; i++) {
+      if (forced[i] === server[i]) commonLen++
+      else break
+    }
+    if (commonLen > 0 && commonLen / minLen >= 0.8) return true
+
+    return false
   }
 
   /** 处理翻译流的响应（流式模式） */
