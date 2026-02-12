@@ -77,13 +77,8 @@ export function registerIpcHandlers(wm: WindowManager): void {
   })
 
   // 接收来自渲染进程的音频数据
-  let audioChunkCount = 0
   ipcMain.on(IPC_CHANNELS.AUDIO_DATA, (_event, audioBuffer: ArrayBuffer) => {
     if (speechService && appState.status === AppStatus.RUNNING) {
-      audioChunkCount++
-      if (audioChunkCount % 50 === 1) {
-        console.log(`[IPC] 收到音频数据 #${audioChunkCount}, 大小: ${audioBuffer.byteLength} bytes`)
-      }
       speechService.writeAudio(Buffer.from(audioBuffer))
     }
   })
@@ -102,8 +97,6 @@ export function registerIpcHandlers(wm: WindowManager): void {
     broadcastState()
     return true
   })
-
-  console.log('[IPC] 所有处理器已注册')
 }
 
 /** 注册 display media handler 以支持系统音频捕获 */
@@ -120,13 +113,11 @@ function registerDisplayMediaHandler(): void {
       callback({})
     })
   })
-  console.log('[IPC] Display media handler 已注册（系统音频捕获）')
 }
 
 /** 开始翻译 */
 async function startTranslation(): Promise<boolean> {
   if (appState.status === AppStatus.RUNNING) {
-    console.warn('[IPC] 翻译已在运行中')
     return false
   }
 
@@ -145,14 +136,14 @@ async function startTranslation(): Promise<boolean> {
     try {
       await checkMicrophonePermission()
     } catch {
-      console.warn('[IPC] 主进程麦克风权限检查异常，将在渲染进程中重试')
+      // 将在渲染进程中通过 getUserMedia 重试
     }
   }
 
   if (appState.audioSources.includes(AudioSource.SYSTEM_AUDIO)) {
     const screenOk = checkScreenRecordingPermission()
     if (!screenOk) {
-      console.warn('[IPC] 屏幕录制权限未授予，系统音频捕获可能失败')
+      // 屏幕录制权限未授予，系统音频捕获可能失败
     }
   }
 
@@ -184,7 +175,6 @@ async function startTranslation(): Promise<boolean> {
     })
 
     speechService.on('error', (error: AppError) => {
-      console.error('[IPC] 语音服务错误:', error.message)
       windowManager.broadcast(IPC_CHANNELS.APP_ERROR, error.toJSON())
 
       if (!error.recoverable) {
@@ -199,7 +189,6 @@ async function startTranslation(): Promise<boolean> {
     windowManager.showSubtitle()
 
     updateState({ status: AppStatus.RUNNING, error: undefined })
-    console.log('[IPC] 翻译已启动')
     return true
   } catch (err) {
     const error = err instanceof AppError
@@ -220,7 +209,6 @@ function stopTranslation(): boolean {
 
   windowManager.hideSubtitle()
   updateState({ status: AppStatus.IDLE, error: undefined })
-  console.log('[IPC] 翻译已停止')
   return true
 }
 

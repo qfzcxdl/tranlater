@@ -40,10 +40,6 @@ export class WindowManager {
     // 窗口准备好后显示，避免白屏闪烁
     this.controlWindow.on('ready-to-show', () => {
       this.controlWindow?.show()
-      // 开发模式下打开 DevTools 以查看渲染进程日志
-      if (process.env.NODE_ENV === 'development' || process.env.ELECTRON_RENDERER_URL) {
-        this.controlWindow?.webContents.openDevTools({ mode: 'detach' })
-      }
     })
 
     // 在外部浏览器中打开链接
@@ -122,9 +118,7 @@ export class WindowManager {
   showSubtitle(): void {
     if (!this.subtitleWindow) {
       this.createSubtitleWindow()
-      // 等待加载完成后再显示
       this.subtitleWindow?.webContents.once('did-finish-load', () => {
-        console.log('[窗口] 字幕窗口加载完成')
         this.subtitleWindow?.show()
       })
     } else {
@@ -147,9 +141,7 @@ export class WindowManager {
   /** 向字幕窗口发送消息 */
   sendToSubtitle(channel: string, ...args: unknown[]): void {
     if (this.subtitleWindow && !this.subtitleWindow.isDestroyed()) {
-      // 确保页面已加载完成再发送消息
       if (this.subtitleWindow.webContents.isLoading()) {
-        console.log(`[窗口] 字幕窗口正在加载，延迟发送 ${channel}`)
         this.subtitleWindow.webContents.once('did-finish-load', () => {
           if (this.subtitleWindow && !this.subtitleWindow.isDestroyed()) {
             this.subtitleWindow.webContents.send(channel, ...args)
@@ -158,8 +150,6 @@ export class WindowManager {
       } else {
         this.subtitleWindow.webContents.send(channel, ...args)
       }
-    } else {
-      console.warn(`[窗口] 字幕窗口不可用，无法发送 ${channel}`)
     }
   }
 

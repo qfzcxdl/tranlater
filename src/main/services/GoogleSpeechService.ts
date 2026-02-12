@@ -1,7 +1,6 @@
 // Google Cloud Speech-to-Text V2 流式识别服务
 // 使用 chirp_2 模型实现实时语音转写
-// 翻译使用 Google Translate API (REST) 对最终结果进行翻译
-// 重要：必须使用 v2.SpeechClient
+// 翻译使用 Google Cloud Translation API 对最终结果进行翻译
 
 import * as speech from '@google-cloud/speech'
 import { EventEmitter } from 'events'
@@ -9,19 +8,16 @@ import * as https from 'https'
 import { Language } from '../../shared/types'
 import { AppError, ErrorCode } from '../utils/errors'
 
-/** 语言代码到 chirp_2 支持的 BCP-47 代码映射 */
 const LANGUAGE_MAP: Record<Language, string> = {
   [Language.CHINESE]: 'cmn-Hans-CN',
   [Language.ENGLISH]: 'en-US',
 }
 
-/** Google Translate API 使用的语言代码 */
 const TRANSLATE_LANG_MAP: Record<Language, string> = {
   [Language.CHINESE]: 'zh-CN',
   [Language.ENGLISH]: 'en',
 }
 
-/** 流式识别最大持续时间 (4.5 分钟) */
 const MAX_STREAM_DURATION_MS = 4.5 * 60 * 1000
 const MIN_RESTART_INTERVAL_MS = 1000
 const MAX_RETRIES = 5
@@ -52,19 +48,18 @@ export class GoogleSpeechService extends EventEmitter {
   private restartTimer: NodeJS.Timeout | null = null
   private retryCount = 0
   private pendingAudioChunks: Buffer[] = []
+  private cachedAuthClient: { getAccessToken: () => Promise<{ token?: string | null }> } | null = null
+  private cachedAccessToken: string | null = null
+  private tokenExpiry = 0
 
   constructor(config: SpeechServiceConfig) {
     super()
     this.config = config
-
     const location = config.location || 'us-central1'
 
     this.client = new speech.v2.SpeechClient({
       apiEndpoint: `${location}-speech.googleapis.com`,
     })
-
-    console.log(`[语音服务] V2 客户端已初始化 - 区域: ${location}, 模型: chirp_2`)
-    console.log(`[语音服务] 转写语言: ${LANGUAGE_MAP[config.sourceLanguage]}, 翻译到: ${TRANSLATE_LANG_MAP[config.targetLanguage]}`)
   }
 
   setLanguages(source: Language, target: Language): void {
@@ -73,7 +68,6 @@ export class GoogleSpeechService extends EventEmitter {
 
     this.config.sourceLanguage = source
     this.config.targetLanguage = target
-    console.log(`[语音服务] 语言已更新: ${LANGUAGE_MAP[source]} → ${TRANSLATE_LANG_MAP[target]}`)
 
     if (wasStreaming) this.startStreaming()
   }
@@ -89,7 +83,6 @@ export class GoogleSpeechService extends EventEmitter {
     this.clearRestartTimer()
     this.destroyStream()
     this.pendingAudioChunks = []
-    console.log('[语音服务] 已停止')
   }
 
   writeAudio(audioData: Buffer): void {
@@ -121,7 +114,6 @@ export class GoogleSpeechService extends EventEmitter {
     try {
       this.recognizeStream = this.client._streamingRecognize()
 
-      // V2 API 配置 - 只做转写，翻译通过 Translate API 完成
       const configRequest = {
         recognizer: `projects/${this.config.projectId}/locations/${location}/recognizers/_`,
         streamingConfig: {
@@ -160,8 +152,6 @@ export class GoogleSpeechService extends EventEmitter {
 
       this.flushPendingAudio()
       this.scheduleAutoRestart()
-
-      console.log('[语音服务] 流式识别已启动')
     } catch (err) {
       console.error('[语音服务] 创建流失败:', err)
       this.handleStreamError(err as Error)
@@ -184,11 +174,8 @@ export class GoogleSpeechService extends EventEmitter {
       const confidence = (alternative.confidence as number) ?? undefined
 
       if (isFinal) {
-        // 最终结果：调用翻译 API 获取翻译
-        console.log(`[语音服务] 最终转写: "${original}"`)
         this.translateAndEmit(original, confidence)
       } else {
-        // 中间结果：直接发送，翻译留空（显示为进行中）
         const speechResult: SpeechResult = {
           original,
           translated: '',
@@ -202,11 +189,9 @@ export class GoogleSpeechService extends EventEmitter {
     }
   }
 
-  /** 翻译文本并发送最终结果 */
   private async translateAndEmit(originalText: string, confidence?: number): Promise<void> {
     try {
       const translated = await this.translateText(originalText)
-      console.log(`[语音服务] 翻译完成: "${originalText}" → "${translated}"`)
 
       const speechResult: SpeechResult = {
         original: originalText,
@@ -217,9 +202,7 @@ export class GoogleSpeechService extends EventEmitter {
         confidence,
       }
       this.emit('result', speechResult)
-    } catch (err) {
-      console.error('[语音服务] 翻译失败:', err)
-      // 翻译失败时仍然发送结果，翻译使用原文
+    } catch {
       const speechResult: SpeechResult = {
         original: originalText,
         translated: originalText,
@@ -232,14 +215,12 @@ export class GoogleSpeechService extends EventEmitter {
     }
   }
 
-  /** 调用 Google Cloud Translation API v2 (REST) */
   private translateText(text: string): Promise<string> {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       const targetLang = TRANSLATE_LANG_MAP[this.config.targetLanguage]
       const sourceLang = TRANSLATE_LANG_MAP[this.config.sourceLanguage]
+      const apiKey = process.env.GOOGLE_TRANSLATE_API_KEY || ''
 
-      // 使用 Google Cloud Translation API v2 (基础版)
-      // 通过 API key 认证（从服务账号获取）或通过 OAuth2
       const postData = JSON.stringify({
         q: text,
         source: sourceLang,
@@ -247,53 +228,47 @@ export class GoogleSpeechService extends EventEmitter {
         format: 'text',
       })
 
-      const options = {
-        hostname: 'translation.googleapis.com',
-        path: `/language/translate/v2?key=${this.getApiKey()}`,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(postData),
-        },
-      }
+      if (apiKey) {
+        const options = {
+          hostname: 'translation.googleapis.com',
+          path: `/language/translate/v2?key=${apiKey}`,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(postData),
+          },
+        }
 
-      const req = https.request(options, (res) => {
-        let data = ''
-        res.on('data', chunk => { data += chunk })
-        res.on('end', () => {
-          try {
-            const parsed = JSON.parse(data)
-            if (parsed.data?.translations?.[0]?.translatedText) {
-              resolve(parsed.data.translations[0].translatedText)
-            } else if (parsed.error) {
-              // API key 方式失败，尝试使用 access token 方式
-              this.translateWithAccessToken(text, sourceLang, targetLang)
-                .then(resolve)
-                .catch(reject)
-            } else {
+        const req = https.request(options, (res) => {
+          let data = ''
+          res.on('data', chunk => { data += chunk })
+          res.on('end', () => {
+            try {
+              const parsed = JSON.parse(data)
+              if (parsed.data?.translations?.[0]?.translatedText) {
+                resolve(parsed.data.translations[0].translatedText)
+              } else {
+                this.translateWithAccessToken(text, sourceLang, targetLang).then(resolve).catch(() => resolve(text))
+              }
+            } catch {
               resolve(text)
             }
-          } catch {
-            resolve(text)
-          }
+          })
         })
-      })
 
-      req.on('error', (err) => {
-        // 回退到 access token 方式
-        this.translateWithAccessToken(text, sourceLang, targetLang)
-          .then(resolve)
-          .catch(reject)
-      })
+        req.on('error', () => {
+          this.translateWithAccessToken(text, sourceLang, targetLang).then(resolve).catch(() => resolve(text))
+        })
 
-      req.write(postData)
-      req.end()
+        req.write(postData)
+        req.end()
+      } else {
+        this.translateWithAccessToken(text, sourceLang, targetLang).then(resolve).catch(() => resolve(text))
+      }
     })
   }
 
-  /** 使用服务账号 access token 调用翻译 API */
   private async translateWithAccessToken(text: string, source: string, target: string): Promise<string> {
-    // 使用 google-auth-library 从服务账号获取 access token
     const { GoogleAuth } = await import('google-auth-library')
     const auth = new GoogleAuth({
       scopes: ['https://www.googleapis.com/auth/cloud-translation'],
@@ -329,7 +304,6 @@ export class GoogleSpeechService extends EventEmitter {
             if (parsed.data?.translations?.[0]?.translatedText) {
               resolve(parsed.data.translations[0].translatedText)
             } else {
-              console.warn('[语音服务] 翻译响应异常:', data.substring(0, 200))
               resolve(text)
             }
           } catch {
@@ -342,11 +316,6 @@ export class GoogleSpeechService extends EventEmitter {
       req.write(postData)
       req.end()
     })
-  }
-
-  /** 获取 API key（从环境变量或配置中） */
-  private getApiKey(): string {
-    return process.env.GOOGLE_TRANSLATE_API_KEY || ''
   }
 
   private handleStreamError(err: Error): void {
@@ -367,7 +336,6 @@ export class GoogleSpeechService extends EventEmitter {
     }
 
     const delay = Math.min(BASE_RETRY_DELAY_MS * Math.pow(2, this.retryCount - 1), 10000)
-    console.log(`[语音服务] ${delay}ms 后重试 (第 ${this.retryCount}/${MAX_RETRIES} 次)`)
     setTimeout(() => { if (this.isStreaming) this.createStream() }, delay)
   }
 
@@ -412,6 +380,5 @@ export class GoogleSpeechService extends EventEmitter {
     this.stopStreaming()
     this.removeAllListeners()
     this.client.close()
-    console.log('[语音服务] 已销毁')
   }
 }
