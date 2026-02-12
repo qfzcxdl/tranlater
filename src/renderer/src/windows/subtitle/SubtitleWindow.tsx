@@ -5,11 +5,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import type { SubtitleItem, TranslationResult } from '../../../../shared/types'
 import './subtitle.css'
 
-/** 最大显示字幕条数 */
-const MAX_SUBTITLES = 5
-
-/** 字幕自动消失时间 (ms) */
-const SUBTITLE_TTL = 15000
+const MAX_SUBTITLES = 8
+const SUBTITLE_TTL = 30000
 
 export const SubtitleWindow: React.FC = () => {
   const [subtitles, setSubtitles] = useState<SubtitleItem[]>([])

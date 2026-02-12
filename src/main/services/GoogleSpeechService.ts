@@ -215,107 +215,85 @@ export class GoogleSpeechService extends EventEmitter {
     }
   }
 
-  private translateText(text: string): Promise<string> {
+  private async translateText(text: string): Promise<string> {
+    const targetLang = TRANSLATE_LANG_MAP[this.config.targetLanguage]
+    const sourceLang = TRANSLATE_LANG_MAP[this.config.sourceLanguage]
+    const apiKey = process.env.GOOGLE_TRANSLATE_API_KEY || ''
+
+    const postData = JSON.stringify({
+      q: text,
+      source: sourceLang,
+      target: targetLang,
+      format: 'text',
+    })
+
+    // 构建请求头
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Content-Length': String(Buffer.byteLength(postData)),
+    }
+
+    let path = '/language/translate/v2'
+
+    if (apiKey) {
+      path += `?key=${apiKey}`
+    } else {
+      // 使用服务账号 access token（带缓存）
+      const token = await this.getAccessToken()
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`
+      }
+    }
+
     return new Promise((resolve) => {
-      const targetLang = TRANSLATE_LANG_MAP[this.config.targetLanguage]
-      const sourceLang = TRANSLATE_LANG_MAP[this.config.sourceLanguage]
-      const apiKey = process.env.GOOGLE_TRANSLATE_API_KEY || ''
-
-      const postData = JSON.stringify({
-        q: text,
-        source: sourceLang,
-        target: targetLang,
-        format: 'text',
-      })
-
-      if (apiKey) {
-        const options = {
-          hostname: 'translation.googleapis.com',
-          path: `/language/translate/v2?key=${apiKey}`,
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Content-Length': Buffer.byteLength(postData),
-          },
-        }
-
-        const req = https.request(options, (res) => {
-          let data = ''
-          res.on('data', chunk => { data += chunk })
-          res.on('end', () => {
-            try {
-              const parsed = JSON.parse(data)
-              if (parsed.data?.translations?.[0]?.translatedText) {
-                resolve(parsed.data.translations[0].translatedText)
-              } else {
-                this.translateWithAccessToken(text, sourceLang, targetLang).then(resolve).catch(() => resolve(text))
-              }
-            } catch {
-              resolve(text)
-            }
-          })
-        })
-
-        req.on('error', () => {
-          this.translateWithAccessToken(text, sourceLang, targetLang).then(resolve).catch(() => resolve(text))
-        })
-
-        req.write(postData)
-        req.end()
-      } else {
-        this.translateWithAccessToken(text, sourceLang, targetLang).then(resolve).catch(() => resolve(text))
-      }
-    })
-  }
-
-  private async translateWithAccessToken(text: string, source: string, target: string): Promise<string> {
-    const { GoogleAuth } = await import('google-auth-library')
-    const auth = new GoogleAuth({
-      scopes: ['https://www.googleapis.com/auth/cloud-translation'],
-    })
-    const client = await auth.getClient()
-    const accessToken = (await client.getAccessToken()).token
-
-    return new Promise((resolve, reject) => {
-      const postData = JSON.stringify({
-        q: text,
-        source,
-        target,
-        format: 'text',
-      })
-
-      const options = {
+      const req = https.request({
         hostname: 'translation.googleapis.com',
-        path: '/language/translate/v2',
+        path,
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(postData),
-          'Authorization': `Bearer ${accessToken}`,
-        },
-      }
-
-      const req = https.request(options, (res) => {
+        headers,
+      }, (res) => {
         let data = ''
         res.on('data', chunk => { data += chunk })
         res.on('end', () => {
           try {
             const parsed = JSON.parse(data)
-            if (parsed.data?.translations?.[0]?.translatedText) {
-              resolve(parsed.data.translations[0].translatedText)
-            } else {
-              resolve(text)
-            }
+            resolve(parsed.data?.translations?.[0]?.translatedText || text)
           } catch {
             resolve(text)
           }
         })
       })
 
-      req.on('error', reject)
+      req.on('error', () => resolve(text))
       req.write(postData)
       req.end()
     })
+  }
+
+  /** 获取 access token（带缓存，token 有效期内不重复获取） */
+  private async getAccessToken(): Promise<string | null> {
+    // token 在过期前 60 秒刷新
+    if (this.cachedAccessToken && Date.now() < this.tokenExpiry - 60000) {
+      return this.cachedAccessToken
+    }
+
+    try {
+      if (!this.cachedAuthClient) {
+        const { GoogleAuth } = await import('google-auth-library')
+        const auth = new GoogleAuth({
+          scopes: ['https://www.googleapis.com/auth/cloud-translation'],
+        })
+        this.cachedAuthClient = await auth.getClient()
+      }
+
+      const result = await this.cachedAuthClient.getAccessToken()
+      this.cachedAccessToken = result.token || null
+      // access token 通常有效期为 1 小时
+      this.tokenExpiry = Date.now() + 3500 * 1000
+      return this.cachedAccessToken
+    } catch {
+      return null
+    }
   }
 
   private handleStreamError(err: Error): void {
