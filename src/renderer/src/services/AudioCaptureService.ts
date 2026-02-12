@@ -3,17 +3,8 @@
 
 import { AudioSource } from '../../../shared/types'
 
-declare global {
-  interface Window {
-    electronAPI: {
-      sendAudioData: (buffer: ArrayBuffer) => void
-      [key: string]: unknown
-    }
-  }
-}
-
-/** PCM 音频参数（Google Speech V2 要求） */
-const SAMPLE_RATE = 16000
+/** Google Speech V2 要求的音频参数 */
+const TARGET_SAMPLE_RATE = 16000
 const CHANNELS = 1
 const BUFFER_SIZE = 4096
 
@@ -26,9 +17,9 @@ interface CaptureContext {
 export class AudioCaptureService {
   private audioContext: AudioContext | null = null
   private captures: Map<AudioSource, CaptureContext> = new Map()
-  private mergerNode: ChannelMergerNode | null = null
   private processorNode: ScriptProcessorNode | null = null
   private isCapturing = false
+  private chunkCount = 0
 
   /** 开始捕获指定音频源 */
   async startCapture(sources: AudioSource[]): Promise<void> {
@@ -36,23 +27,38 @@ export class AudioCaptureService {
       await this.stopCapture()
     }
 
-    // 创建音频上下文（目标采样率 16kHz）
-    this.audioContext = new AudioContext({ sampleRate: SAMPLE_RATE })
+    console.log(`[音频捕获] 准备启动, 源: ${sources.join(', ')}`)
+
+    // 创建音频上下文 - 使用默认采样率，后续手动降采样
+    // 注意：某些浏览器不支持非标准采样率的 AudioContext
+    this.audioContext = new AudioContext()
+    console.log(`[音频捕获] AudioContext 创建成功, 采样率: ${this.audioContext.sampleRate}Hz, 状态: ${this.audioContext.state}`)
+
+    // 确保 AudioContext 已启动（某些浏览器需要用户交互后才能启动）
+    if (this.audioContext.state === 'suspended') {
+      console.log('[音频捕获] AudioContext 处于 suspended 状态，尝试 resume...')
+      await this.audioContext.resume()
+      console.log(`[音频捕获] AudioContext resume 后状态: ${this.audioContext.state}`)
+    }
 
     // 根据选择的音频源获取媒体流
-    const capturePromises = sources.map(async (source) => {
+    for (const source of sources) {
       try {
+        console.log(`[音频捕获] 正在获取 ${source} 媒体流...`)
         const stream = await this.getMediaStream(source)
+        const tracks = stream.getAudioTracks()
+        console.log(`[音频捕获] ${source} 媒体流获取成功, 音频轨道数: ${tracks.length}`)
+        if (tracks.length > 0) {
+          console.log(`[音频捕获] 轨道信息: ${tracks[0].label}, enabled=${tracks[0].enabled}, muted=${tracks[0].muted}`)
+        }
         const audioSource = this.audioContext!.createMediaStreamSource(stream)
         this.captures.set(source, { stream, source: audioSource })
-        console.log(`[音频捕获] ${source} 已连接`)
+        console.log(`[音频捕获] ${source} 已连接到 AudioContext`)
       } catch (err) {
         console.error(`[音频捕获] 无法获取 ${source}:`, err)
         throw err
       }
-    })
-
-    await Promise.all(capturePromises)
+    }
 
     if (this.captures.size === 0) {
       throw new Error('没有可用的音频源')
@@ -62,6 +68,7 @@ export class AudioCaptureService {
     this.setupProcessingPipeline()
 
     this.isCapturing = true
+    this.chunkCount = 0
     console.log(`[音频捕获] 已启动，活跃源: ${Array.from(this.captures.keys()).join(', ')}`)
   }
 
@@ -74,11 +81,6 @@ export class AudioCaptureService {
       this.processorNode.disconnect()
       this.processorNode.onaudioprocess = null
       this.processorNode = null
-    }
-
-    if (this.mergerNode) {
-      this.mergerNode.disconnect()
-      this.mergerNode = null
     }
 
     // 停止所有媒体流
@@ -95,7 +97,7 @@ export class AudioCaptureService {
       this.audioContext = null
     }
 
-    console.log('[音频捕获] 已停止')
+    console.log(`[音频捕获] 已停止, 总共发送 ${this.chunkCount} 个音频块`)
   }
 
   /** 获取指定源的媒体流 */
@@ -112,7 +114,6 @@ export class AudioCaptureService {
     return navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: CHANNELS,
-        sampleRate: SAMPLE_RATE,
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
@@ -123,12 +124,9 @@ export class AudioCaptureService {
 
   /** 获取系统音频媒体流（通过 Electron 的 display media handler） */
   private async getSystemAudioStream(): Promise<MediaStream> {
-    // 这会触发 main process 中注册的 setDisplayMediaRequestHandler
-    // 在 macOS 上需要屏幕录制权限
     const stream = await navigator.mediaDevices.getDisplayMedia({
       audio: true,
       video: {
-        // 需要提供 video 约束，但我们只需要音频
         width: 1,
         height: 1,
         frameRate: 1,
@@ -144,12 +142,13 @@ export class AudioCaptureService {
     return stream
   }
 
-  /** 设置音频处理管道：混音 → PCM 转换 → 发送到主进程 */
+  /** 设置音频处理管道：混音 → 降采样 → PCM 转换 → 发送到主进程 */
   private setupProcessingPipeline(): void {
     if (!this.audioContext) return
 
+    const nativeSampleRate = this.audioContext.sampleRate
+
     // 使用 ScriptProcessorNode 处理音频
-    // （AudioWorklet 在 Electron 的 renderer 中可能有兼容性问题）
     this.processorNode = this.audioContext.createScriptProcessor(BUFFER_SIZE, CHANNELS, CHANNELS)
 
     this.processorNode.onaudioprocess = (event) => {
@@ -157,32 +156,48 @@ export class AudioCaptureService {
 
       const inputData = event.inputBuffer.getChannelData(0)
 
+      // 如果需要降采样（从硬件采样率降到 16kHz）
+      let samples: Float32Array
+      if (nativeSampleRate !== TARGET_SAMPLE_RATE) {
+        samples = downsample(inputData, nativeSampleRate, TARGET_SAMPLE_RATE)
+      } else {
+        samples = inputData
+      }
+
       // 将 Float32 转换为 LINEAR16 (Int16)
-      const pcmBuffer = float32ToLinear16(inputData)
+      const pcmBuffer = float32ToLinear16(samples)
+
+      // 创建 ArrayBuffer 副本（原始 buffer 可能在下一帧被重用）
+      const bufferCopy = pcmBuffer.buffer.slice(0)
 
       // 发送到主进程
-      window.electronAPI.sendAudioData(pcmBuffer.buffer)
+      window.electronAPI.sendAudioData(bufferCopy)
+
+      this.chunkCount++
+      if (this.chunkCount % 100 === 1) {
+        console.log(`[音频捕获] 已发送 ${this.chunkCount} 个音频块 (${bufferCopy.byteLength} bytes/块)`)
+      }
     }
 
-    // 如果有多个源，通过 GainNode 混合
+    // 连接音频源到处理器
     if (this.captures.size === 1) {
-      // 单个源直接连接
       const ctx = this.captures.values().next().value!
       ctx.source.connect(this.processorNode)
     } else {
-      // 多个源通过 GainNode 混合
+      // 多源混合
       const gainNode = this.audioContext.createGain()
-      gainNode.gain.value = 1.0 / this.captures.size // 避免混合后削波
+      gainNode.gain.value = 1.0 / this.captures.size
 
       for (const ctx of this.captures.values()) {
         ctx.source.connect(gainNode)
       }
-
       gainNode.connect(this.processorNode)
     }
 
-    // 连接到 destination（ScriptProcessorNode 需要连接输出才能工作）
+    // 连接到 destination（ScriptProcessorNode 需要连接输出才能触发 onaudioprocess）
     this.processorNode.connect(this.audioContext.destination)
+
+    console.log(`[音频捕获] 处理管道已建立: 原始采样率=${nativeSampleRate}Hz, 目标=${TARGET_SAMPLE_RATE}Hz`)
   }
 
   /** 当前是否正在捕获 */
@@ -197,15 +212,35 @@ export class AudioCaptureService {
 }
 
 /**
+ * 简单线性插值降采样
+ */
+function downsample(buffer: Float32Array, fromRate: number, toRate: number): Float32Array {
+  if (fromRate === toRate) return buffer
+
+  const ratio = fromRate / toRate
+  const newLength = Math.round(buffer.length / ratio)
+  const result = new Float32Array(newLength)
+
+  for (let i = 0; i < newLength; i++) {
+    const srcIndex = i * ratio
+    const srcIndexFloor = Math.floor(srcIndex)
+    const srcIndexCeil = Math.min(srcIndexFloor + 1, buffer.length - 1)
+    const frac = srcIndex - srcIndexFloor
+
+    result[i] = buffer[srcIndexFloor] * (1 - frac) + buffer[srcIndexCeil] * frac
+  }
+
+  return result
+}
+
+/**
  * 将 Float32Array 音频数据转换为 LINEAR16 (Int16) PCM
  * Google Speech API 要求 LINEAR16 编码
  */
 function float32ToLinear16(float32Array: Float32Array): Int16Array {
   const int16Array = new Int16Array(float32Array.length)
   for (let i = 0; i < float32Array.length; i++) {
-    // 钳位到 [-1, 1] 范围
     const s = Math.max(-1, Math.min(1, float32Array[i]))
-    // 转换为 16 位整数
     int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF
   }
   return int16Array

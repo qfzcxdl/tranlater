@@ -17,7 +17,8 @@
   },
   "dependencies": {
     "@google-cloud/speech": "^6.7.0",
-    "dotenv": "^16.4.7"
+    "dotenv": "^16.4.7",
+    "google-auth-library": "^10.5.0"
   },
   "devDependencies": {
     "@types/node": "^20.17.12",
@@ -44,7 +45,10 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ]
     },

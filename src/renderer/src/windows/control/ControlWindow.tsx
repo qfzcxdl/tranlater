@@ -12,23 +12,6 @@ import type { AppState, DeviceAvailability } from '../../../../shared/types'
 import { AudioCaptureService } from '../../services/AudioCaptureService'
 import './control.css'
 
-declare global {
-  interface Window {
-    electronAPI: {
-      startTranslation: () => Promise<boolean>
-      stopTranslation: () => Promise<boolean>
-      getAppState: () => Promise<AppState>
-      checkDevices: () => Promise<DeviceAvailability>
-      setAudioSources: (sources: AudioSource[]) => Promise<boolean>
-      setLanguages: (source: Language, target: Language) => Promise<boolean>
-      sendAudioData: (buffer: ArrayBuffer) => void
-      onStateChanged: (cb: (state: AppState) => void) => () => void
-      onTranslationResult: (cb: (result: unknown) => void) => () => void
-      onError: (cb: (error: { code: string; message: string }) => void) => () => void
-    }
-  }
-}
-
 // 音频捕获服务单例
 const audioCaptureService = new AudioCaptureService()
 
@@ -37,6 +20,7 @@ export const ControlWindow: React.FC = () => {
   const [sourceLanguage, setSourceLanguage] = useState<Language>(Language.CHINESE)
   const [targetLanguage, setTargetLanguage] = useState<Language>(Language.ENGLISH)
   const [audioSources, setAudioSources] = useState<AudioSource[]>([AudioSource.MICROPHONE])
+  // 默认麦克风可用（渲染进程通过 getUserMedia 请求权限，不依赖主进程检测）
   const [devices, setDevices] = useState<DeviceAvailability>({ microphone: true, systemAudio: false })
   const [errorMessage, setErrorMessage] = useState<string>('')
   const [isLoading, setIsLoading] = useState(false)
@@ -101,10 +85,15 @@ export const ControlWindow: React.FC = () => {
         await audioCaptureService.startCapture(audioSources)
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : '操作失败'
+      let message = err instanceof Error ? err.message : '操作失败'
+      // 用户友好的权限错误提示
+      if (message.includes('Permission denied') || message.includes('NotAllowedError')) {
+        message = '麦克风权限被拒绝。请在系统设置 > 隐私与安全性 > 麦克风中，为当前应用开启权限后重试。'
+      }
       setErrorMessage(message)
-      // 确保出错时停止音频捕获
+      // 确保出错时停止音频捕获和翻译服务
       await audioCaptureService.stopCapture().catch(() => {})
+      await window.electronAPI.stopTranslation().catch(() => {})
     } finally {
       setIsLoading(false)
     }

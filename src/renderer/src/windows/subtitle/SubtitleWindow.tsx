@@ -5,16 +5,6 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import type { SubtitleItem, TranslationResult } from '../../../../shared/types'
 import './subtitle.css'
 
-declare global {
-  interface Window {
-    electronAPI: {
-      onTranslationResult: (cb: (result: TranslationResult) => void) => () => void
-      onTranslationInterim: (cb: (result: TranslationResult) => void) => () => void
-      [key: string]: unknown
-    }
-  }
-}
-
 /** 最大显示字幕条数 */
 const MAX_SUBTITLES = 5
 
@@ -110,7 +100,9 @@ export const SubtitleWindow: React.FC = () => {
             }`}
           >
             <div className="subtitle-original">{item.original}</div>
-            <div className="subtitle-translated">{item.translated}</div>
+            {item.translated && item.translated !== item.original && (
+              <div className="subtitle-translated">{item.translated}</div>
+            )}
           </div>
         ))}
       </div>

@@ -39,7 +39,16 @@ export function registerIpcHandlers(wm: WindowManager): void {
   })
 
   ipcMain.handle(IPC_CHANNELS.APP_CHECK_DEVICES, async (): Promise<DeviceAvailability> => {
-    const micAvailable = await checkMicrophonePermission()
+    // 麦克风权限：尝试请求授权（首次会弹窗）
+    // 即使主进程检测为 denied，渲染进程的 getUserMedia 仍可能触发授权
+    let micAvailable = false
+    try {
+      micAvailable = await checkMicrophonePermission()
+    } catch {
+      // 某些情况下主进程无法检测，默认允许尝试
+      micAvailable = true
+    }
+
     const screenAvailable = checkScreenRecordingPermission()
 
     return {
@@ -68,8 +77,13 @@ export function registerIpcHandlers(wm: WindowManager): void {
   })
 
   // 接收来自渲染进程的音频数据
+  let audioChunkCount = 0
   ipcMain.on(IPC_CHANNELS.AUDIO_DATA, (_event, audioBuffer: ArrayBuffer) => {
     if (speechService && appState.status === AppStatus.RUNNING) {
+      audioChunkCount++
+      if (audioChunkCount % 50 === 1) {
+        console.log(`[IPC] 收到音频数据 #${audioChunkCount}, 大小: ${audioBuffer.byteLength} bytes`)
+      }
       speechService.writeAudio(Buffer.from(audioBuffer))
     }
   })
@@ -124,22 +138,21 @@ async function startTranslation(): Promise<boolean> {
     throw error
   }
 
-  // 检查音频源权限
+  // 权限检查（仅作为提示，不阻塞启动）
+  // 实际的麦克风权限由渲染进程的 getUserMedia 触发系统授权弹窗
+  // 系统音频权限需要用户手动在系统设置中开启屏幕录制
   if (appState.audioSources.includes(AudioSource.MICROPHONE)) {
-    const micOk = await checkMicrophonePermission()
-    if (!micOk) {
-      const error = createPermissionError('microphone')
-      updateState({ status: AppStatus.ERROR, error: error.toJSON() })
-      throw error
+    try {
+      await checkMicrophonePermission()
+    } catch {
+      console.warn('[IPC] 主进程麦克风权限检查异常，将在渲染进程中重试')
     }
   }
 
   if (appState.audioSources.includes(AudioSource.SYSTEM_AUDIO)) {
     const screenOk = checkScreenRecordingPermission()
     if (!screenOk) {
-      const error = createPermissionError('screen')
-      updateState({ status: AppStatus.ERROR, error: error.toJSON() })
-      throw error
+      console.warn('[IPC] 屏幕录制权限未授予，系统音频捕获可能失败')
     }
   }
 

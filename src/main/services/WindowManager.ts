@@ -40,6 +40,10 @@ export class WindowManager {
     // 窗口准备好后显示，避免白屏闪烁
     this.controlWindow.on('ready-to-show', () => {
       this.controlWindow?.show()
+      // 开发模式下打开 DevTools 以查看渲染进程日志
+      if (process.env.NODE_ENV === 'development' || process.env.ELECTRON_RENDERER_URL) {
+        this.controlWindow?.webContents.openDevTools({ mode: 'detach' })
+      }
     })
 
     // 在外部浏览器中打开链接
@@ -86,8 +90,7 @@ export class WindowManager {
       skipTaskbar: true,
       resizable: true,
       movable: true,
-      // macOS 特有: panel 类型允许悬浮在全屏应用之上
-      type: 'panel',
+      // 不使用 type: 'panel'，某些 Electron 版本不支持 nonactivating panel
       webPreferences: {
         preload: join(__dirname, '../preload/index.js'),
         contextIsolation: true,
@@ -119,8 +122,14 @@ export class WindowManager {
   showSubtitle(): void {
     if (!this.subtitleWindow) {
       this.createSubtitleWindow()
+      // 等待加载完成后再显示
+      this.subtitleWindow?.webContents.once('did-finish-load', () => {
+        console.log('[窗口] 字幕窗口加载完成')
+        this.subtitleWindow?.show()
+      })
+    } else {
+      this.subtitleWindow.show()
     }
-    this.subtitleWindow?.show()
   }
 
   /** 隐藏字幕窗口 */
@@ -138,7 +147,19 @@ export class WindowManager {
   /** 向字幕窗口发送消息 */
   sendToSubtitle(channel: string, ...args: unknown[]): void {
     if (this.subtitleWindow && !this.subtitleWindow.isDestroyed()) {
-      this.subtitleWindow.webContents.send(channel, ...args)
+      // 确保页面已加载完成再发送消息
+      if (this.subtitleWindow.webContents.isLoading()) {
+        console.log(`[窗口] 字幕窗口正在加载，延迟发送 ${channel}`)
+        this.subtitleWindow.webContents.once('did-finish-load', () => {
+          if (this.subtitleWindow && !this.subtitleWindow.isDestroyed()) {
+            this.subtitleWindow.webContents.send(channel, ...args)
+          }
+        })
+      } else {
+        this.subtitleWindow.webContents.send(channel, ...args)
+      }
+    } else {
+      console.warn(`[窗口] 字幕窗口不可用，无法发送 ${channel}`)
     }
   }
 
