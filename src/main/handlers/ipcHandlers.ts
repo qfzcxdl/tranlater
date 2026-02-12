@@ -130,6 +130,20 @@ export function registerIpcHandlers(wm: WindowManager): void {
     return true
   })
 
+  ipcMain.handle(IPC_CHANNELS.WINDOW_TOGGLE_SUBTITLE, (_event, visible: boolean) => {
+    if (visible) {
+      windowManager.showSubtitle()
+    } else {
+      windowManager.hideSubtitle()
+    }
+    return true
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WINDOW_GET_SUBTITLE_VISIBLE, () => {
+    const win = windowManager.getSubtitleWindow()
+    return win ? win.isVisible() : false
+  })
+
   ipcMain.handle(IPC_CHANNELS.TRANSLATION_SET_MODE, (_event, mode: TranslationMode) => {
     appState.translationMode = mode
 
@@ -218,6 +232,14 @@ async function startTranslation(): Promise<boolean> {
       windowManager.sendToSubtitle(IPC_CHANNELS.TRANSLATION_INTERIM, translationResult)
     })
 
+    speechService.on('update', (result: SpeechResult) => {
+      const translationResult = {
+        ...result,
+        timestamp: Date.now(),
+      }
+      windowManager.sendToSubtitle(IPC_CHANNELS.TRANSLATION_UPDATE, translationResult)
+    })
+
     speechService.on('error', (error: AppError) => {
       windowManager.broadcast(IPC_CHANNELS.APP_ERROR, error.toJSON())
 
@@ -251,7 +273,7 @@ function stopTranslation(): boolean {
     speechService = null
   }
 
-  windowManager.hideSubtitle()
+  // 停止翻译时不隐藏字幕窗口，保留历史字幕可查看
   updateState({ status: AppStatus.IDLE, error: undefined })
   return true
 }

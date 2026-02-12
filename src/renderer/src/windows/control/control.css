@@ -418,6 +418,29 @@ body {
   color: var(--text-primary);
 }
 
+.btn-toggle-subtitle {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--border-radius);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.btn-toggle-subtitle:hover {
+  border-color: var(--primary);
+  color: var(--text-primary);
+}
+
+.btn-toggle-subtitle.active {
+  background: rgba(79, 195, 247, 0.15);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
 .hint-text {
   margin-top: 6px;
   font-size: 11px;

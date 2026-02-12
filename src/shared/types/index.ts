@@ -97,10 +97,13 @@ export const IPC_CHANNELS = {
   TRANSLATION_SET_MODE: 'translation:setMode',
   TRANSLATION_RESULT: 'translation:result',
   TRANSLATION_INTERIM: 'translation:interim',
+  TRANSLATION_UPDATE: 'translation:update',
 
   // 窗口控制
   WINDOW_MOVE_SUBTITLE: 'window:moveSubtitle',
   WINDOW_RESIZE_SUBTITLE: 'window:resizeSubtitle',
   WINDOW_GET_SUBTITLE_BOUNDS: 'window:getSubtitleBounds',
   WINDOW_RESET_SUBTITLE_POSITION: 'window:resetSubtitlePosition',
+  WINDOW_TOGGLE_SUBTITLE: 'window:toggleSubtitle',
+  WINDOW_GET_SUBTITLE_VISIBLE: 'window:getSubtitleVisible',
 } as const

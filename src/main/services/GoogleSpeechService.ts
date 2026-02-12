@@ -57,9 +57,10 @@ export class GoogleSpeechService extends EventEmitter {
   private pendingInterimOriginal = ''
   private pendingInterimConfidence: number | undefined = undefined
 
-  // 去重：最近一次发送的 final 文本
+  // 去重/替换：最近一次发送的 final 文本
   private lastEmittedFinalText = ''
   private lastEmittedFinalTime = 0
+  private isUpdateMode = false  // 当前 final 是替换上一条而非新增
 
 
   private isStreaming = false
@@ -261,19 +262,30 @@ export class GoogleSpeechService extends EventEmitter {
         // 服务端返回 final 结果
         this.pendingInterimOriginal = ''
 
-        // 去重：检查是否与最近发送的 final 结果高度重叠
-        if (this.isOverlappingWithLastFinal(transcript)) {
-          continue
+        // 检查是否与最近发送的 final 结果高度重叠
+        // 如果重叠且新文本更长，用替换模式（update）而非新增
+        const isOverlap = this.isOverlappingWithLastFinal(transcript)
+        if (isOverlap) {
+          console.log(`[去重] 检测到重叠: isOverlap=${isOverlap}, newLen=${transcript.length}, lastLen=${this.lastEmittedFinalText.length}, 动作=${transcript.length > this.lastEmittedFinalText.length ? 'replace' : 'skip'}`)
+          // 仅当新文本更长时才替换，否则跳过
+          if (transcript.length <= this.lastEmittedFinalText.length) {
+            continue
+          }
         }
+
+        // 立即记录 final 文本用于后续去重（必须在 async 操作之前）
+        this.lastEmittedFinalText = transcript
+        this.lastEmittedFinalTime = Date.now()
 
         if (this.config.translationMode === TranslationMode.STREAMING) {
           this.latestTranscript = transcript
           this.latestIsFinal = true
           this.latestConfidence = confidence
           this.transcriptVersion++
+          this.isUpdateMode = isOverlap
           this.tryFlushStreaming()
         } else {
-          this.translateAndEmit(transcript, confidence)
+          this.translateAndEmit(transcript, confidence, isOverlap)
         }
       } else {
         // interim 结果
@@ -409,12 +421,17 @@ export class GoogleSpeechService extends EventEmitter {
       confidence: this.latestConfidence,
     }
 
-    this.emit(isFinal ? 'result' : 'interim', speechResult)
+    if (isFinal && this.isUpdateMode) {
+      this.emit('update', speechResult)
+    } else {
+      this.emit(isFinal ? 'result' : 'interim', speechResult)
+    }
 
     if (isFinal) {
       // 记录最近 final 文本用于去重
       this.lastEmittedFinalText = original || translated
       this.lastEmittedFinalTime = Date.now()
+      this.isUpdateMode = false
 
       this.latestTranscript = ''
       this.latestTranslation = ''
@@ -434,16 +451,19 @@ export class GoogleSpeechService extends EventEmitter {
 
   // === 精确模式翻译 ===
 
-  private async translateAndEmit(originalText: string, confidence?: number): Promise<void> {
-    // 先立即发送一个带原文的 interim 结果，让用户看到转写内容
-    this.emit('interim', {
-      original: originalText,
-      translated: '',
-      sourceLanguage: this.config.sourceLanguage,
-      targetLanguage: this.config.targetLanguage,
-      isFinal: false,
-      confidence,
-    } as SpeechResult)
+  private async translateAndEmit(originalText: string, confidence?: number, isUpdate = false): Promise<void> {
+    // 替换模式不需要发送 interim，直接翻译
+    if (!isUpdate) {
+      // 先立即发送一个带原文的 interim 结果，让用户看到转写内容
+      this.emit('interim', {
+        original: originalText,
+        translated: '',
+        sourceLanguage: this.config.sourceLanguage,
+        targetLanguage: this.config.targetLanguage,
+        isFinal: false,
+        confidence,
+      } as SpeechResult)
+    }
 
     let translated = originalText
     try {
@@ -456,14 +476,16 @@ export class GoogleSpeechService extends EventEmitter {
     this.lastEmittedFinalText = originalText
     this.lastEmittedFinalTime = Date.now()
 
-    this.emit('result', {
+    const result: SpeechResult = {
       original: originalText,
       translated,
       sourceLanguage: this.config.sourceLanguage,
       targetLanguage: this.config.targetLanguage,
       isFinal: true,
       confidence,
-    } as SpeechResult)
+    }
+
+    this.emit(isUpdate ? 'update' : 'result', result)
   }
 
   private async translateText(text: string): Promise<string> {

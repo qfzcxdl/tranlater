@@ -26,6 +26,7 @@ export const ControlWindow: React.FC = () => {
   const [devices, setDevices] = useState<DeviceAvailability>({ microphone: true, systemAudio: false })
   const [errorMessage, setErrorMessage] = useState<string>('')
   const [isLoading, setIsLoading] = useState(false)
+  const [subtitleVisible, setSubtitleVisible] = useState(false)
 
   // 初始化：获取应用状态和设备信息
   useEffect(() => {
@@ -41,6 +42,10 @@ export const ControlWindow: React.FC = () => {
         setAudioSources(state.audioSources)
         setTranslationMode(state.translationMode)
         setDevices(deviceInfo)
+
+        // 检查字幕窗口可见状态
+        const visible = await window.electronAPI.getSubtitleVisible()
+        setSubtitleVisible(visible)
       } catch (err) {
         console.error('初始化失败:', err)
       }
@@ -87,6 +92,7 @@ export const ControlWindow: React.FC = () => {
         // 启动：先启动翻译服务，再开始音频捕获
         await window.electronAPI.startTranslation()
         await audioCaptureService.startCapture(audioSources)
+        setSubtitleVisible(true)
       }
     } catch (err) {
       let message = err instanceof Error ? err.message : '操作失败'
@@ -191,6 +197,17 @@ export const ControlWindow: React.FC = () => {
     const { width, height } = sizeMap[size]
     window.electronAPI.resizeSubtitleWindow(width, height)
   }, [])
+
+  // 切换字幕窗口显示/隐藏
+  const handleToggleSubtitle = useCallback(async () => {
+    try {
+      const newVisible = !subtitleVisible
+      await window.electronAPI.toggleSubtitle(newVisible)
+      setSubtitleVisible(newVisible)
+    } catch (err) {
+      console.error('切换字幕显示失败:', err)
+    }
+  }, [subtitleVisible])
 
   // 重置字幕窗口位置
   const handleResetSubtitlePosition = useCallback(async () => {
@@ -315,23 +332,32 @@ export const ControlWindow: React.FC = () => {
         </section>
 
         {/* 字幕窗口控制 */}
-        {isRunning && (
-          <section className="section">
-            <h2 className="section-title">字幕窗口</h2>
-            <div className="subtitle-controls">
-              <div className="subtitle-size-group">
-                <span className="control-label">大小：</span>
-                <button className="btn-size" onClick={() => handleSubtitleSize('small')}>小</button>
-                <button className="btn-size" onClick={() => handleSubtitleSize('medium')}>中</button>
-                <button className="btn-size" onClick={() => handleSubtitleSize('large')}>大</button>
-              </div>
-              <button className="btn-reset" onClick={handleResetSubtitlePosition}>
-                重置位置
-              </button>
-            </div>
+        <section className="section">
+          <h2 className="section-title">字幕窗口</h2>
+          <div className="subtitle-controls">
+            <button
+              className={`btn-toggle-subtitle ${subtitleVisible ? 'active' : ''}`}
+              onClick={handleToggleSubtitle}
+            >
+              {subtitleVisible ? '隐藏字幕' : '显示字幕'}
+            </button>
+            {subtitleVisible && (
+              <>
+                <div className="subtitle-size-group">
+                  <button className="btn-size" onClick={() => handleSubtitleSize('small')}>小</button>
+                  <button className="btn-size" onClick={() => handleSubtitleSize('medium')}>中</button>
+                  <button className="btn-size" onClick={() => handleSubtitleSize('large')}>大</button>
+                </div>
+                <button className="btn-reset" onClick={handleResetSubtitlePosition}>
+                  重置位置
+                </button>
+              </>
+            )}
+          </div>
+          {subtitleVisible && (
             <p className="hint-text">拖拽字幕窗口顶部白色手柄可移动位置</p>
-          </section>
-        )}
+          )}
+        </section>
 
         {/* 主控制按钮 */}
         <section className="section control-section">

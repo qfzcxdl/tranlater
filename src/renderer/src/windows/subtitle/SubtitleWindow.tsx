@@ -5,8 +5,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import type { SubtitleItem, TranslationResult } from '../../../../shared/types'
 import './subtitle.css'
 
-const MAX_SUBTITLES = 8
-const SUBTITLE_TTL = 30000
+const MAX_SUBTITLES = 20
+const SUBTITLE_TTL = 120000  // 字幕显示2分钟后自动消失
 
 export const SubtitleWindow: React.FC = () => {
   const [subtitles, setSubtitles] = useState<SubtitleItem[]>([])
@@ -96,9 +96,28 @@ export const SubtitleWindow: React.FC = () => {
       requestAnimationFrame(scrollToBottom)
     })
 
+    // 监听更新事件（替换最后一条 final 字幕）
+    const unsubUpdate = window.electronAPI.onTranslationUpdate((result: TranslationResult) => {
+      setSubtitles(prev => {
+        if (prev.length === 0) return prev
+        // 替换最后一条 final 字幕的内容
+        const updated = [...prev]
+        const lastIdx = updated.length - 1
+        updated[lastIdx] = {
+          ...updated[lastIdx],
+          original: result.original,
+          translated: result.translated,
+        }
+        return updated
+      })
+
+      requestAnimationFrame(scrollToBottom)
+    })
+
     return () => {
       unsubResult()
       unsubInterim()
+      unsubUpdate()
     }
   }, [scrollToBottom])
 

@@ -58,6 +58,14 @@ const electronAPI = {
   resetSubtitlePosition: () =>
     ipcRenderer.invoke(IPC_CHANNELS.WINDOW_RESET_SUBTITLE_POSITION),
 
+  /** 显示/隐藏字幕窗口 */
+  toggleSubtitle: (visible: boolean) =>
+    ipcRenderer.invoke(IPC_CHANNELS.WINDOW_TOGGLE_SUBTITLE, visible),
+
+  /** 获取字幕窗口是否可见 */
+  getSubtitleVisible: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.WINDOW_GET_SUBTITLE_VISIBLE),
+
   // === 事件监听 ===
 
   /** 监听应用状态变化 */
@@ -79,6 +87,13 @@ const electronAPI = {
     const listener = (_event: Electron.IpcRendererEvent, result: unknown) => callback(result)
     ipcRenderer.on(IPC_CHANNELS.TRANSLATION_INTERIM, listener)
     return () => ipcRenderer.removeListener(IPC_CHANNELS.TRANSLATION_INTERIM, listener)
+  },
+
+  /** 监听翻译结果更新（替换最近一条） */
+  onTranslationUpdate: (callback: (result: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, result: unknown) => callback(result)
+    ipcRenderer.on(IPC_CHANNELS.TRANSLATION_UPDATE, listener)
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.TRANSLATION_UPDATE, listener)
   },
 
   /** 监听应用错误 */

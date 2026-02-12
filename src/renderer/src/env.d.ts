@@ -24,11 +24,14 @@ declare global {
       resizeSubtitleWindow: (width: number, height: number) => void
       getSubtitleBounds: () => Promise<{ x: number; y: number; width: number; height: number } | null>
       resetSubtitlePosition: () => Promise<boolean>
+      toggleSubtitle: (visible: boolean) => Promise<boolean>
+      getSubtitleVisible: () => Promise<boolean>
 
       // 事件监听
       onStateChanged: (cb: (state: AppState) => void) => () => void
       onTranslationResult: (cb: (result: TranslationResult) => void) => () => void
       onTranslationInterim: (cb: (result: TranslationResult) => void) => () => void
+      onTranslationUpdate: (cb: (result: TranslationResult) => void) => () => void
       onError: (cb: (error: { code: string; message: string }) => void) => () => void
     }
   }
