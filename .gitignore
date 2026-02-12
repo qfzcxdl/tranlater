@@ -99,8 +99,4 @@ local-file/
 settings.local.json
 .serena/
 
-assets/swagger
-scripts/tst-apis/protoapi
-scripts/tst-apis/pkg
-
 *.pyc
