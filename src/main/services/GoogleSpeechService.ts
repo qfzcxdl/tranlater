@@ -56,7 +56,10 @@ export class GoogleSpeechService extends EventEmitter {
   // 语音活动检测：最近一次未确认的 interim 结果
   private pendingInterimOriginal = ''
   private pendingInterimConfidence: number | undefined = undefined
-  private speechEndTimer: NodeJS.Timeout | null = null
+
+  // 去重：最近一次发送的 final 文本
+  private lastEmittedFinalText = ''
+  private lastEmittedFinalTime = 0
 
 
   private isStreaming = false
@@ -120,6 +123,8 @@ export class GoogleSpeechService extends EventEmitter {
     this.latestTranslation = ''
     this.pendingInterimOriginal = ''
     this.pendingInterimConfidence = undefined
+    this.lastEmittedFinalText = ''
+    this.lastEmittedFinalTime = 0
   }
 
   writeAudio(audioData: Buffer): void {
@@ -169,9 +174,6 @@ export class GoogleSpeechService extends EventEmitter {
           streamingFeatures: {
             interimResults: true,
             enableVoiceActivityEvents: true,
-            voiceActivityTimeout: {
-              speechEndTimeout: { seconds: 0, nanos: 500000000 }, // 500ms
-            },
           },
         },
       })
@@ -206,9 +208,6 @@ export class GoogleSpeechService extends EventEmitter {
             streamingFeatures: {
               interimResults: true,
               enableVoiceActivityEvents: true,
-              voiceActivityTimeout: {
-                speechEndTimeout: { seconds: 0, nanos: 500000000 }, // 500ms
-              },
             },
           },
         })
@@ -262,6 +261,11 @@ export class GoogleSpeechService extends EventEmitter {
         // 服务端返回 final 结果
         this.pendingInterimOriginal = ''
 
+        // 去重：检查是否与最近发送的 final 结果高度重叠
+        if (this.isOverlappingWithLastFinal(transcript)) {
+          continue
+        }
+
         if (this.config.translationMode === TranslationMode.STREAMING) {
           this.latestTranscript = transcript
           this.latestIsFinal = true
@@ -294,6 +298,35 @@ export class GoogleSpeechService extends EventEmitter {
         }
       }
     }
+  }
+
+  /** 检查新的 final 文本是否与最近发送的 final 文本高度重叠 */
+  private isOverlappingWithLastFinal(newText: string): boolean {
+    if (!this.lastEmittedFinalText) return false
+    // 超过 8 秒的不再去重
+    if (Date.now() - this.lastEmittedFinalTime > 8000) return false
+
+    const last = this.lastEmittedFinalText.trim().toLowerCase()
+    const curr = newText.trim().toLowerCase()
+
+    // 完全相同
+    if (last === curr) return true
+
+    // 新文本以旧文本开头（服务端补全）或旧文本以新文本开头
+    if (curr.startsWith(last) || last.startsWith(curr)) return true
+
+    // 计算共同前缀比例
+    const minLen = Math.min(last.length, curr.length)
+    if (minLen < 10) return false // 短文本不去重
+    let commonLen = 0
+    for (let i = 0; i < minLen; i++) {
+      if (last[i] === curr[i]) commonLen++
+      else break
+    }
+    // 共同前缀超过短文本的 70%
+    if (commonLen / minLen >= 0.7) return true
+
+    return false
   }
 
   /** 语音活动结束时，强制将 pending interim 作为 final 发送 */
@@ -379,6 +412,10 @@ export class GoogleSpeechService extends EventEmitter {
     this.emit(isFinal ? 'result' : 'interim', speechResult)
 
     if (isFinal) {
+      // 记录最近 final 文本用于去重
+      this.lastEmittedFinalText = original || translated
+      this.lastEmittedFinalTime = Date.now()
+
       this.latestTranscript = ''
       this.latestTranslation = ''
       this.latestIsFinal = false
@@ -414,6 +451,10 @@ export class GoogleSpeechService extends EventEmitter {
     } catch (err) {
       console.error('[语音服务] 翻译失败，使用原文:', err)
     }
+
+    // 记录最近 final 文本用于去重
+    this.lastEmittedFinalText = originalText
+    this.lastEmittedFinalTime = Date.now()
 
     this.emit('result', {
       original: originalText,
